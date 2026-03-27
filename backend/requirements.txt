@@ -1,2 +1,12 @@
 flask
+<<<<<<< HEAD
 flask-socketio
+=======
+flask-socketio
+flask-cors
+eventlet
+pillow
+numpy
+python-engineio
+python-socketio
+>>>>>>> 8fa64fbaba70bc11300f44e7610fa5c3b3fdf59b
