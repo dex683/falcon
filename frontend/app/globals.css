@@ -1,26 +1,225 @@
-@import "tailwindcss";
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Dark-first design — map background app */
+  --background: oklch(0.10 0 0);
+  --foreground: oklch(0.96 0 0);
+
+  --card: oklch(0.14 0 0);
+  --card-foreground: oklch(0.96 0 0);
+
+  --popover: oklch(0.14 0.005 240);
+  --popover-foreground: oklch(0.96 0 0);
+
+  --primary: oklch(0.65 0.18 220);
+  --primary-foreground: oklch(0.98 0 0);
+
+  --secondary: oklch(0.18 0 0);
+  --secondary-foreground: oklch(0.85 0 0);
+
+  --muted: oklch(0.20 0 0);
+  --muted-foreground: oklch(0.55 0 0);
+
+  --accent: oklch(0.22 0.01 230);
+  --accent-foreground: oklch(0.96 0 0);
+
+  --destructive: oklch(0.55 0.22 25);
+  --destructive-foreground: oklch(0.98 0 0);
+
+  --border: oklch(0.24 0.005 240 / 60%);
+  --input: oklch(0.22 0.005 240);
+  --ring: oklch(0.55 0.18 220);
+
+  --radius: 0.75rem;
+
+  /* Surface — frosted glass panels */
+  --surface: oklch(0.13 0.005 240 / 75%);
+  --surface-border: oklch(0.35 0.01 240 / 40%);
+
+  /* Severity palette */
+  --severity-low: oklch(0.72 0.19 142);
+  --severity-low-bg: oklch(0.72 0.19 142 / 15%);
+  --severity-moderate: oklch(0.75 0.17 60);
+  --severity-moderate-bg: oklch(0.75 0.17 60 / 15%);
+  --severity-severe: oklch(0.62 0.23 25);
+  --severity-severe-bg: oklch(0.62 0.23 25 / 15%);
+
+  /* Status */
+  --status-live: oklch(0.72 0.19 142);
+  --status-offline: oklch(0.55 0 0);
+  --status-error: oklch(0.62 0.23 25);
+
+  /* Sidebar */
+  --sidebar: oklch(0.13 0.005 240 / 80%);
+  --sidebar-foreground: oklch(0.96 0 0);
+  --sidebar-primary: oklch(0.65 0.18 220);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.22 0.01 230);
+  --sidebar-accent-foreground: oklch(0.96 0 0);
+  --sidebar-border: oklch(0.28 0.01 240 / 40%);
+  --sidebar-ring: oklch(0.55 0.18 220);
+
+  /* Chart */
+  --chart-1: oklch(0.65 0.18 220);
+  --chart-2: oklch(0.72 0.19 142);
+  --chart-3: oklch(0.75 0.17 60);
+  --chart-4: oklch(0.62 0.23 25);
+  --chart-5: oklch(0.70 0.15 280);
+}
+
+.dark {
+  --background: oklch(0.10 0 0);
+  --foreground: oklch(0.96 0 0);
+  --card: oklch(0.14 0 0);
+  --card-foreground: oklch(0.96 0 0);
+  --popover: oklch(0.14 0.005 240);
+  --popover-foreground: oklch(0.96 0 0);
+  --primary: oklch(0.65 0.18 220);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.18 0 0);
+  --secondary-foreground: oklch(0.85 0 0);
+  --muted: oklch(0.20 0 0);
+  --muted-foreground: oklch(0.55 0 0);
+  --accent: oklch(0.22 0.01 230);
+  --accent-foreground: oklch(0.96 0 0);
+  --destructive: oklch(0.55 0.22 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(0.24 0.005 240 / 60%);
+  --input: oklch(0.22 0.005 240);
+  --ring: oklch(0.55 0.18 220);
 }
 
 @theme inline {
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), monospace;
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-surface: var(--surface);
+  --color-surface-border: var(--surface-border);
+  --color-severity-low: var(--severity-low);
+  --color-severity-low-bg: var(--severity-low-bg);
+  --color-severity-moderate: var(--severity-moderate);
+  --color-severity-moderate-bg: var(--severity-moderate-bg);
+  --color-severity-severe: var(--severity-severe);
+  --color-severity-severe-bg: var(--severity-severe-bg);
+  --color-status-live: var(--status-live);
+  --color-status-offline: var(--status-offline);
+  --color-status-error: var(--status-error);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-background text-foreground;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* MapLibre popup reset — override default white popup */
+.maplibregl-popup-content {
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+}
+.maplibregl-popup-tip {
+  display: none !important;
+}
+.maplibregl-popup-close-button {
+  display: none !important;
+}
+
+/* MapLibre GL overrides */
+.maplibregl-canvas-container,
+.maplibregl-canvas {
+  outline: none !important;
+}
+.maplibregl-ctrl-group {
+  background: var(--surface) !important;
+  border: 1px solid var(--surface-border) !important;
+  backdrop-filter: blur(16px) !important;
+  border-radius: 10px !important;
+  overflow: hidden;
+}
+.maplibregl-ctrl-group button {
+  background: transparent !important;
+  color: var(--foreground) !important;
+  border: none !important;
+}
+.maplibregl-ctrl-group button:hover {
+  background: var(--accent) !important;
+}
+.maplibregl-ctrl-attrib {
+  background: oklch(0.10 0 0 / 60%) !important;
+  backdrop-filter: blur(8px);
+  color: var(--muted-foreground) !important;
+  border-radius: 6px !important;
+  font-size: 10px !important;
+}
+.maplibregl-ctrl-attrib a {
+  color: var(--muted-foreground) !important;
+}
+
+/* Severity pulse animation */
+@keyframes severity-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.3); }
+}
+.severity-pulse {
+  animation: severity-pulse 1.6s ease-in-out infinite;
+}
+
+/* Marker fade-in */
+@keyframes marker-fade-in {
+  from { opacity: 0; transform: scale(0.4); }
+  to { opacity: 1; transform: scale(1); }
+}
+.marker-fade-in {
+  animation: marker-fade-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
