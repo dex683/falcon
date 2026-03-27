@@ -1,1 +1,8 @@
 flask
+flask-socketio
+flask-cors
+eventlet
+pillow
+numpy
+python-engineio
+python-socketio
