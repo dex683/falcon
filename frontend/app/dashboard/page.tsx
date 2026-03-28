@@ -29,8 +29,8 @@ const LiveMap = dynamic(() => import("@/components/live-map").then((m) => m.Live
 
 const SIMULATION_LABELS = ["roof_damage", "road_block", "flooding", "debris_field", "fire_damage"]
 
-const DEFAULT_DRONE_SPEED_MS = 6
-const DEFAULT_SPIRAL_SPACING_METERS = 50
+const DEFAULT_DRONE_SPEED_MS = 25
+const DEFAULT_SPIRAL_SPACING_METERS = 200
 const DEFAULT_DRONE_ALTITUDE_M = 120
 const ALTITUDE_COVERAGE_CELL_FACTOR = 0.6
 const CUSTOM_POINT_TRIGGER_METERS = 12
@@ -269,7 +269,7 @@ export default function DashboardPage() {
         spiralAngleOffsetRad: angleOffset,
         spiralDirection: direction,
         spiralSpacingMeters: Number.isFinite(spiralSpacingMeters)
-          ? Math.max(10, Math.min(200, spiralSpacingMeters))
+          ? Math.max(10, Math.min(500, spiralSpacingMeters))
           : DEFAULT_SPIRAL_SPACING_METERS,
         spiralOuterRadiusMeters: outerRadiusMeters,
         spiralCompleted: false,
@@ -485,7 +485,7 @@ export default function DashboardPage() {
         onAutoPanChange={setAutoPan}
         onShowHeatmapChange={setShowHeatmap}
         onSimulationIntervalChange={(next) => setSimulationIntervalMs(Math.max(500, Math.min(10000, Number.isFinite(next) ? next : 2200)))}
-        onDroneSpeedChange={(next) => setDroneSpeedMs(Math.max(0.5, Math.min(25, Number.isFinite(next) ? next : DEFAULT_DRONE_SPEED_MS)))}
+        onDroneSpeedChange={(next) => setDroneSpeedMs(Math.max(0.5, Math.min(50, Number.isFinite(next) ? next : DEFAULT_DRONE_SPEED_MS)))}
         onMaxVisibleReportsChange={(next) => setMaxVisibleReports(Math.max(20, Math.min(300, Number.isFinite(next) ? next : 120)))}
         onResetSettings={() => {
           setAutoPan(true)
@@ -519,7 +519,7 @@ export default function DashboardPage() {
         droneAltitudeM={droneAltitudeM}
         onDroneAltitudeChange={(next) => setDroneAltitudeM(Math.max(10, Math.min(1000, Number.isFinite(next) ? next : DEFAULT_DRONE_ALTITUDE_M)))}
         spiralSpacingMeters={spiralSpacingMeters}
-        onSpiralSpacingChange={(next) => setSpiralSpacingMeters(Math.max(10, Math.min(200, Number.isFinite(next) ? next : DEFAULT_SPIRAL_SPACING_METERS)))}
+        onSpiralSpacingChange={(next) => setSpiralSpacingMeters(Math.max(10, Math.min(500, Number.isFinite(next) ? next : DEFAULT_SPIRAL_SPACING_METERS)))}
         folderImageCount={folderImages.length}
         onSelectImageFolder={(fileList) => {
           const files = fileList ? Array.from(fileList) : []
