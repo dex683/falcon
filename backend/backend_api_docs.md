@@ -5,6 +5,26 @@
 
 ---
 
+## Damage Detection Backends
+
+The server supports two interchangeable damage detection backends, selected at startup via environment variables.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `USE_GEMINI_FALLBACK` | `0` | Set to `1` / `true` / `yes` to use Gemini Vision API instead of the mock ML model |
+| `GEMINI_API_KEY` | _(none)_ | Required when `USE_GEMINI_FALLBACK=1`. Get a key at [aistudio.google.com](https://aistudio.google.com/) |
+
+```env
+# .env
+USE_GEMINI_FALLBACK=1
+GEMINI_API_KEY=your_key_here
+```
+
+> [!NOTE]
+> If Gemini initialisation fails (missing key, import error), the server automatically falls back to the mock model and logs a warning — it never crashes.
+
+---
+
 ## Table of Contents
 
 1. [Connection Setup](#1-connection-setup)
@@ -66,12 +86,14 @@ Health check + live stats.
   "uptime": 1711612345.67,
   "connected_clients": 2,
   "simulation": { "running": true, "frames_sent": 42, "battery": 87.3, "telemetry": { ... } },
-  "ml_model": "DamageDetector-Mock (fire|flood|destruction|good)",
+  "ml_model": "GeminiDamageDetector (gemini-2.0-flash)",
   "categories": ["fire", "flood", "destruction", "good"],
   "severity_scale": "1–10",
   "frames_processed": 42
 }
 ```
+
+> `ml_model` reflects the active backend: `"DamageDetector-Mock (fire|flood|destruction|good)"` when using the mock, or `"GeminiDamageDetector (gemini-2.0-flash)"` when Gemini is enabled.
 
 ---
 
@@ -106,9 +128,18 @@ Single-image damage prediction (outside the WebSocket stream).
   "type": "fire",
   "severity": 7,
   "severity_label": "Severe",
-  "confidence": 0.83
+  "confidence": 0.83,
+  "total_area_pct": 23.5
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `string` | `"fire"` \| `"flood"` \| `"destruction"` \| `"good"` |
+| `severity` | `int` | `1–10` |
+| `severity_label` | `string` | Human-readable severity |
+| `confidence` | `float` | Model confidence `0.0–1.0` |
+| `total_area_pct` | `float` | Estimated % of image area affected (`0–100`). `0` when type is `"good"`. Populated by Gemini; mock returns `0`. |
 
 **Error (400):**
 ```json
@@ -251,7 +282,8 @@ socket.on("processed_frame", (data) => {
       "severity_label": "Severe",
       "color": "#FF4422",
       "bbox": { "x1": 120, "y1": 80, "x2": 300, "y2": 250 },
-      "area_px": 30600
+      "area_px": 30600,
+      "total_area_pct": 23.5
     }
   ],
   "processing_time_ms": 142.3,
@@ -265,7 +297,8 @@ socket.on("processed_frame", (data) => {
     "total_detections": 3,
     "damage_types": { "fire": 3 },
     "max_severity": 8,
-    "max_severity_label": "Very Severe"
+    "max_severity_label": "Very Severe",
+    "total_area_pct": 23.5
   },
   "drone_metadata": { /* DroneTelemetry — see below */ },
   "timestamp": 1711612345.67
@@ -280,6 +313,7 @@ socket.on("processed_frame", (data) => {
 >   "type": "good",
 >   "severity": 1,
 >   "severity_label": "None",
+>   "total_area_pct": 0.0,
 >   "message": "No damage detected — area looks good"
 > }
 > ```
@@ -346,12 +380,13 @@ socket.on("error", (err) => {
 |-------|------|-------------|
 | `id` | `string` | 8-char unique ID |
 | `label` | `string` | `"fire"` \| `"flood"` \| `"destruction"` |
-| `confidence` | `float` | `0.55 – 0.98` |
+| `confidence` | `float` | `0.0 – 1.0` |
 | `severity` | `int` | `1 – 10` |
 | `severity_label` | `string` | Human-readable severity (see table below) |
 | `color` | `string` | Hex color for the damage type |
 | `bbox` | `object` | `{ x1, y1, x2, y2 }` — pixel coordinates |
 | `area_px` | `int` | Bounding box area in pixels |
+| `total_area_pct` | `float` | Estimated % of image area affected (`0 – 100`). Populated by Gemini backend; `0` from mock. |
 
 ---
 
