@@ -1,9 +1,20 @@
 """
-ML Damage Detection Processor
-------------------------------
-Simulated damage detector for the MVP. Generates realistic random detections
-on drone images. Drop-in replaceable with a real model (YOLOv8, etc.)
-by implementing the same `process_frame()` interface.
+ML Damage Detection Processor — Mock Model
+--------------------------------------------
+Mocked damage detector that simulates predictions with the target categories:
+  - fire
+  - flood
+  - destruction
+  - good
+
+Each prediction returns:
+  - type: one of the 4 categories
+  - severity: integer scale 1–10 (1 = minimal, 10 = catastrophic)
+  - severity_label: human-readable severity text
+  - confidence: model confidence score (0.0–1.0)
+
+Drop-in replaceable with the real YOLOv8 model by implementing the same
+`predict()` and `process_frame()` interfaces.
 """
 
 import base64
@@ -15,42 +26,99 @@ import uuid
 from PIL import Image, ImageDraw, ImageFont
 
 # ─── Damage Categories ──────────────────────────────────────────────
-DAMAGE_TYPES = [
-    {"label": "Crack",         "color": "#FF4444", "severity_range": (0.3, 0.9)},
-    {"label": "Spalling",      "color": "#FF8800", "severity_range": (0.2, 0.8)},
-    {"label": "Corrosion",     "color": "#FFCC00", "severity_range": (0.4, 0.95)},
-    {"label": "Delamination",  "color": "#AA44FF", "severity_range": (0.3, 0.85)},
-    {"label": "Water Damage",  "color": "#4488FF", "severity_range": (0.2, 0.7)},
-    {"label": "Structural",    "color": "#FF2266", "severity_range": (0.6, 1.0)},
-    {"label": "Surface Wear",  "color": "#44CC88", "severity_range": (0.1, 0.5)},
-    {"label": "Displacement",  "color": "#FF6644", "severity_range": (0.5, 0.9)},
-]
+DAMAGE_CATEGORIES = {
+    "fire": {
+        "color": "#FF4422",
+        "severity_range": (3, 10),
+        "weight": 0.25,  # probability weight
+    },
+    "flood": {
+        "color": "#2288FF",
+        "severity_range": (2, 9),
+        "weight": 0.25,
+    },
+    "destruction": {
+        "color": "#FF2266",
+        "severity_range": (5, 10),
+        "weight": 0.25,
+    },
+    "good": {
+        "color": "#44CC66",
+        "severity_range": (1, 1),  # always severity 1 (no damage)
+        "weight": 0.25,
+    },
+}
 
 SEVERITY_LABELS = {
-    (0.0, 0.3): "Low",
-    (0.3, 0.6): "Medium",
-    (0.6, 0.8): "High",
-    (0.8, 1.0): "Critical",
+    1: "None",
+    2: "Minimal",
+    3: "Low",
+    4: "Moderate",
+    5: "Significant",
+    6: "High",
+    7: "Severe",
+    8: "Very Severe",
+    9: "Critical",
+    10: "Catastrophic",
 }
 
 
-def _get_severity_label(score: float) -> str:
-    for (lo, hi), label in SEVERITY_LABELS.items():
-        if lo <= score < hi:
-            return label
-    return "Critical"
+def _get_severity_label(severity: int) -> str:
+    return SEVERITY_LABELS.get(severity, "Unknown")
 
 
 class DamageDetector:
     """
-    Simulated damage detector for MVP.
-    Swap this class for a real model by keeping the same `process_frame()` signature.
+    Mock damage detector for development.
+    Swap this class for the real YOLOv8 model by keeping the same interface.
     """
 
     def __init__(self, min_detections: int = 1, max_detections: int = 5):
         self.min_detections = min_detections
         self.max_detections = max_detections
         self.frame_count = 0
+
+    # ─── Single Image Prediction (Simple API) ────────────────────────
+
+    def predict(self, image_b64: str) -> dict:
+        """
+        Predict damage type and severity for a single image.
+
+        Args:
+            image_b64: Base64-encoded image string (JPEG/PNG)
+
+        Returns:
+            dict with keys:
+                - type: "fire" | "flood" | "destruction" | "good"
+                - severity: int 1–10
+                - severity_label: human-readable severity
+                - confidence: float 0.0–1.0
+        """
+        # Simulate model inference delay (50–200ms)
+        time.sleep(random.uniform(0.05, 0.2))
+
+        # Pick a category weighted randomly
+        categories = list(DAMAGE_CATEGORIES.keys())
+        weights = [DAMAGE_CATEGORIES[c]["weight"] for c in categories]
+        damage_type = random.choices(categories, weights=weights, k=1)[0]
+
+        cat = DAMAGE_CATEGORIES[damage_type]
+
+        if damage_type == "good":
+            severity = 1
+            confidence = round(random.uniform(0.80, 0.99), 2)
+        else:
+            severity = random.randint(*cat["severity_range"])
+            confidence = round(random.uniform(0.55, 0.98), 2)
+
+        return {
+            "type": damage_type,
+            "severity": severity,
+            "severity_label": _get_severity_label(severity),
+            "confidence": confidence,
+        }
+
+    # ─── Full Frame Processing (for WebSocket streaming) ─────────────
 
     def process_frame(self, image_b64: str) -> dict:
         """
@@ -63,8 +131,11 @@ class DamageDetector:
             dict with keys:
                 - image: base64-encoded annotated image
                 - detections: list of detection dicts
+                - prediction: overall prediction (type + severity)
                 - processing_time_ms: time taken in ms
                 - frame_id: unique frame identifier
+                - total_damage_count: number of damage detections
+                - summary: summary dict
         """
         start_time = time.time()
         self.frame_count += 1
@@ -74,36 +145,41 @@ class DamageDetector:
         image = Image.open(io.BytesIO(image_data)).convert("RGB")
         width, height = image.size
 
-        # Generate simulated detections
-        num_detections = random.randint(self.min_detections, self.max_detections)
+        # Get the overall prediction for this frame
+        prediction = self.predict(image_b64)
+
+        # Generate detections (bounding boxes) based on the prediction
         detections = []
 
-        for _ in range(num_detections):
-            damage = random.choice(DAMAGE_TYPES)
-            confidence = round(random.uniform(0.55, 0.98), 2)
-            severity = round(random.uniform(*damage["severity_range"]), 2)
+        if prediction["type"] != "good":
+            num_detections = random.randint(self.min_detections, self.max_detections)
 
-            # Random bounding box (ensuring reasonable size)
-            box_w = random.randint(int(width * 0.05), int(width * 0.25))
-            box_h = random.randint(int(height * 0.05), int(height * 0.25))
-            x1 = random.randint(0, max(0, width - box_w))
-            y1 = random.randint(0, max(0, height - box_h))
-            x2 = x1 + box_w
-            y2 = y1 + box_h
+            for _ in range(num_detections):
+                cat = DAMAGE_CATEGORIES[prediction["type"]]
+                det_confidence = round(random.uniform(0.55, 0.98), 2)
+                det_severity = random.randint(*cat["severity_range"])
 
-            detections.append({
-                "id": str(uuid.uuid4())[:8],
-                "label": damage["label"],
-                "confidence": confidence,
-                "severity": severity,
-                "severity_label": _get_severity_label(severity),
-                "color": damage["color"],
-                "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-                "area_px": box_w * box_h,
-            })
+                # Random bounding box
+                box_w = random.randint(int(width * 0.05), int(width * 0.25))
+                box_h = random.randint(int(height * 0.05), int(height * 0.25))
+                x1 = random.randint(0, max(0, width - box_w))
+                y1 = random.randint(0, max(0, height - box_h))
+                x2 = x1 + box_w
+                y2 = y1 + box_h
+
+                detections.append({
+                    "id": str(uuid.uuid4())[:8],
+                    "label": prediction["type"],
+                    "confidence": det_confidence,
+                    "severity": det_severity,
+                    "severity_label": _get_severity_label(det_severity),
+                    "color": cat["color"],
+                    "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                    "area_px": box_w * box_h,
+                })
 
         # Annotate the image with bounding boxes
-        annotated_image = self._annotate_image(image, detections)
+        annotated_image = self._annotate_image(image, detections, prediction)
 
         # Encode result
         buffer = io.BytesIO()
@@ -115,14 +191,15 @@ class DamageDetector:
         return {
             "image": annotated_b64,
             "detections": detections,
+            "prediction": prediction,
             "processing_time_ms": processing_time,
             "frame_id": f"frame_{self.frame_count:06d}",
             "total_damage_count": len(detections),
-            "summary": self._generate_summary(detections),
+            "summary": self._generate_summary(detections, prediction),
         }
 
-    def _annotate_image(self, image: Image.Image, detections: list) -> Image.Image:
-        """Draw bounding boxes and labels on the image."""
+    def _annotate_image(self, image: Image.Image, detections: list, prediction: dict) -> Image.Image:
+        """Draw bounding boxes, labels, and overall prediction on the image."""
         annotated = image.copy()
         draw = ImageDraw.Draw(annotated)
 
@@ -130,20 +207,45 @@ class DamageDetector:
         try:
             font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 14)
             font_small = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 11)
+            font_large = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 18)
         except (OSError, IOError):
             try:
                 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
                 font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 11)
+                font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
             except (OSError, IOError):
                 font = ImageFont.load_default()
                 font_small = font
+                font_large = font
 
+        # Draw overall prediction banner at the top
+        pred_type = prediction["type"].upper()
+        pred_severity = prediction["severity"]
+        pred_color = DAMAGE_CATEGORIES[prediction["type"]]["color"]
+        banner_text = f"  {pred_type}  |  Severity: {pred_severity}/10 ({prediction['severity_label']})  "
+
+        text_bbox = draw.textbbox((0, 0), banner_text, font=font_large)
+        text_w = text_bbox[2] - text_bbox[0]
+        text_h = text_bbox[3] - text_bbox[1]
+        banner_h = text_h + 16
+
+        # Semi-transparent banner background
+        overlay = Image.new("RGBA", annotated.size, (0, 0, 0, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+        overlay_draw.rectangle([0, 0, annotated.width, banner_h], fill=(0, 0, 0, 180))
+        annotated = Image.alpha_composite(annotated.convert("RGBA"), overlay).convert("RGB")
+        draw = ImageDraw.Draw(annotated)
+
+        draw.text((10, 8), banner_text, fill=pred_color, font=font_large)
+
+        # Draw bounding boxes for individual detections
         for det in detections:
             bbox = det["bbox"]
             color = det["color"]
             label = det["label"]
             confidence = det["confidence"]
             severity_label = det["severity_label"]
+            severity = det["severity"]
 
             x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
 
@@ -153,7 +255,7 @@ class DamageDetector:
 
             # Draw label background
             label_text = f"{label} {confidence:.0%}"
-            severity_text = f"[{severity_label}]"
+            severity_text = f"[Severity: {severity}/10 — {severity_label}]"
 
             # Get text dimensions
             text_bbox = draw.textbbox((0, 0), label_text, font=font)
@@ -189,10 +291,16 @@ class DamageDetector:
 
         return annotated
 
-    def _generate_summary(self, detections: list) -> dict:
+    def _generate_summary(self, detections: list, prediction: dict) -> dict:
         """Generate a summary of all detections."""
-        if not detections:
-            return {"status": "clear", "message": "No damage detected"}
+        if prediction["type"] == "good":
+            return {
+                "status": "good",
+                "type": "good",
+                "severity": 1,
+                "severity_label": "None",
+                "message": "No damage detected — area looks good",
+            }
 
         damage_counts = {}
         max_severity = 0
@@ -203,6 +311,9 @@ class DamageDetector:
 
         return {
             "status": "damage_detected",
+            "type": prediction["type"],
+            "severity": prediction["severity"],
+            "severity_label": prediction["severity_label"],
             "total_detections": len(detections),
             "damage_types": damage_counts,
             "max_severity": max_severity,

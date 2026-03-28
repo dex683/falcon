@@ -65,7 +65,9 @@ def api_status():
         "uptime": time.time(),
         "connected_clients": len(connected_clients),
         "simulation": drone_sim.get_status(),
-        "ml_model": "DamageDetector-MVP (simulated)",
+        "ml_model": "DamageDetector-Mock (fire|flood|destruction|good)",
+        "categories": ["fire", "flood", "destruction", "good"],
+        "severity_scale": "1–10",
         "frames_processed": detector.frame_count,
     })
 
@@ -73,6 +75,45 @@ def api_status():
 @app.route("/api/simulation/status")
 def simulation_status():
     return jsonify(drone_sim.get_status())
+
+
+@app.route("/api/predict", methods=["POST"])
+def predict_damage():
+    """
+    Single-image damage prediction endpoint.
+
+    Accepts:
+        JSON body with { "image": "<base64-encoded image>" }
+        OR multipart form with an 'image' file field
+
+    Returns:
+        {
+            "type": "fire" | "flood" | "destruction" | "good",
+            "severity": 1–10,
+            "severity_label": "...",
+            "confidence": 0.0–1.0
+        }
+    """
+    import base64
+
+    image_b64 = None
+
+    # Accept JSON body
+    if request.is_json:
+        image_b64 = request.json.get("image")
+    # Accept multipart file upload
+    elif "image" in request.files:
+        file = request.files["image"]
+        image_b64 = base64.b64encode(file.read()).decode("utf-8")
+
+    if not image_b64:
+        return jsonify({"error": "No image provided. Send JSON {image: base64} or multipart file."}), 400
+
+    try:
+        prediction = detector.predict(image_b64)
+        return jsonify(prediction)
+    except Exception as e:
+        return jsonify({"error": f"Prediction failed: {str(e)}"}), 500
 
 
 # ═══════════════════════════════════════════════════════════════════════
