@@ -1,11 +1,27 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import MapGL, { Marker, Popup, NavigationControl, type MapRef } from "react-map-gl/maplibre"
+import MapGL, {
+  Layer,
+  Marker,
+  NavigationControl,
+  Popup,
+  Source,
+  type MapRef,
+} from "react-map-gl/maplibre"
 import type { MapLibreEvent } from "maplibre-gl"
+import { Plane } from "lucide-react"
 import type { DroneFrame } from "@/context/SocketContext"
 import { getSeverityLevel, SEVERITY_CONFIG } from "@/lib/severity"
 import { SeverityBadge } from "@/components/severity-badge"
+import {
+  buildCircleFeature,
+  buildCoverageCollection,
+  distanceMeters,
+  type CircleDraft,
+  type CoverageCircle,
+  type DeployedDrone,
+} from "@/lib/simulator"
 import "maplibre-gl/dist/maplibre-gl.css"
 
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/bright"
@@ -13,29 +29,88 @@ const MAP_STYLE = "https://tiles.openfreemap.org/styles/bright"
 interface LiveMapProps {
   frames: DroneFrame[]
   latestFrame: DroneFrame | null
+  autoPan: boolean
+  showHeatmap: boolean
+  drawMode: boolean
+  coverageCircles: CoverageCircle[]
+  deployedDrones: DeployedDrone[]
+  circleDraft: CircleDraft | null
+  onCircleDraftChange: (draft: CircleDraft | null) => void
+  onCircleDrawComplete: (draft: CircleDraft) => void
 }
 
 interface PopupInfo {
   frame: DroneFrame
 }
 
-export function LiveMap({ frames, latestFrame }: LiveMapProps) {
+export function LiveMap({
+  frames,
+  latestFrame,
+  autoPan,
+  showHeatmap,
+  drawMode,
+  coverageCircles,
+  deployedDrones,
+  circleDraft,
+  onCircleDraftChange,
+  onCircleDrawComplete,
+}: LiveMapProps) {
   const mapRef = useRef<MapRef>(null)
   const [popupInfo, setPopupInfo] = useState<PopupInfo | null>(null)
   const [mapLoaded, setMapLoaded] = useState(false)
+  const [drawStart, setDrawStart] = useState<{ lat: number; lng: number } | null>(null)
 
-  // Deduplicate frames by frame_id — keep the latest occurrence
-  const uniqueFrames = useMemo(() => {
-    const seen = new Map<string, DroneFrame>()
-    for (const frame of frames) {
-      seen.set(frame.frame_id, frame)
+  const draftGeoJson = useMemo(() => {
+    if (!circleDraft || circleDraft.radiusMeters < 10) return null
+    return {
+      type: "FeatureCollection" as const,
+      features: [buildCircleFeature(circleDraft)],
     }
-    return Array.from(seen.values())
+  }, [circleDraft])
+
+  const coverageGeoJson = useMemo(() => buildCoverageCollection(coverageCircles), [coverageCircles])
+
+  // Deduplicate frames by frame_id — keep the newest occurrence (frames are newest-first)
+  const uniqueFrames = useMemo(() => {
+    const out: DroneFrame[] = []
+    const seen = new Set<string>()
+    for (const frame of frames) {
+      if (seen.has(frame.frame_id)) continue
+      seen.add(frame.frame_id)
+      out.push(frame)
+    }
+    return out
   }, [frames])
+
+  const heatmapGeoJson = useMemo(() => {
+    if (!showHeatmap || uniqueFrames.length === 0) return null
+
+    const points = uniqueFrames.slice(0, 500).map((frame) => {
+      const normalizedSeverity = Number.isFinite(frame.severity)
+        ? Math.max(0, Math.min(1, frame.severity / 10))
+        : 0
+
+      return {
+        type: "Feature" as const,
+        geometry: {
+          type: "Point" as const,
+          coordinates: [frame.lng, frame.lat] as [number, number],
+        },
+        properties: {
+          weight: normalizedSeverity,
+        },
+      }
+    })
+
+    return {
+      type: "FeatureCollection" as const,
+      features: points,
+    }
+  }, [showHeatmap, uniqueFrames])
 
   // Auto-pan to latest frame only if it falls outside the current viewport
   useEffect(() => {
-    if (!latestFrame || !mapRef.current || !mapLoaded) return
+    if (!autoPan || !latestFrame || !mapRef.current || !mapLoaded) return
     const map = mapRef.current.getMap()
     const bounds = map.getBounds()
     const inView = bounds.contains([latestFrame.lng, latestFrame.lat])
@@ -46,7 +121,7 @@ export function LiveMap({ frames, latestFrame }: LiveMapProps) {
         easing: (t) => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t,
       })
     }
-  }, [latestFrame, mapLoaded])
+  }, [autoPan, latestFrame, mapLoaded])
 
   const handleMapLoad = useCallback((e: MapLibreEvent) => {
     setMapLoaded(true)
@@ -78,6 +153,49 @@ export function LiveMap({ frames, latestFrame }: LiveMapProps) {
     }
   }, [])
 
+  const handleMapClick = useCallback((event: { lngLat: { lat: number; lng: number } }) => {
+    if (!drawMode) return
+    const { lat, lng } = event.lngLat
+
+    if (!drawStart) {
+      setDrawStart({ lat, lng })
+      onCircleDraftChange({ centerLat: lat, centerLng: lng, radiusMeters: 40 })
+      return
+    }
+
+    const radiusMeters = distanceMeters(drawStart.lat, drawStart.lng, lat, lng)
+    if (radiusMeters < 25) {
+      setDrawStart(null)
+      onCircleDraftChange(null)
+      return
+    }
+
+    const draft = {
+      centerLat: drawStart.lat,
+      centerLng: drawStart.lng,
+      radiusMeters,
+    }
+
+    onCircleDrawComplete(draft)
+    setDrawStart(null)
+  }, [drawMode, drawStart, onCircleDraftChange, onCircleDrawComplete])
+
+  const handleMapMove = useCallback((event: { lngLat: { lat: number; lng: number } }) => {
+    if (!drawMode || !drawStart) return
+    const { lat, lng } = event.lngLat
+    const radiusMeters = distanceMeters(drawStart.lat, drawStart.lng, lat, lng)
+    onCircleDraftChange({
+      centerLat: drawStart.lat,
+      centerLng: drawStart.lng,
+      radiusMeters,
+    })
+  }, [drawMode, drawStart, onCircleDraftChange])
+
+  useEffect(() => {
+    if (drawMode) return
+    setDrawStart(null)
+  }, [drawMode])
+
   return (
     <div className="fixed inset-0 z-0">
       <MapGL
@@ -92,10 +210,99 @@ export function LiveMap({ frames, latestFrame }: LiveMapProps) {
         style={{ width: "100%", height: "100%" }}
         mapStyle={MAP_STYLE}
         onLoad={handleMapLoad}
+        onClick={handleMapClick}
+        onMouseMove={handleMapMove}
         attributionControl={false}
+        cursor={drawMode ? "crosshair" : "grab"}
         reuseMaps
       >
         <NavigationControl position="bottom-right" style={{ bottom: "96px", right: "16px" }} />
+
+        {heatmapGeoJson ? (
+          <Source id="severity-heatmap" type="geojson" data={heatmapGeoJson}>
+            <Layer
+              id="severity-heatmap-layer"
+              type="heatmap"
+              paint={{
+                "heatmap-weight": ["get", "weight"],
+                "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 10, 1, 15, 3],
+                "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 10, 18, 15, 44],
+                "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.7, 14, 0.55, 18, 0.35],
+                "heatmap-color": [
+                  "interpolate",
+                  ["linear"],
+                  ["heatmap-density"],
+                  0,
+                  "rgba(0,0,0,0)",
+                  0.35,
+                  SEVERITY_CONFIG.low.hex,
+                  0.65,
+                  SEVERITY_CONFIG.moderate.hex,
+                  0.9,
+                  SEVERITY_CONFIG.severe.hex,
+                ],
+              }}
+            />
+          </Source>
+        ) : null}
+
+        <Source id="coverage-zones" type="geojson" data={coverageGeoJson}>
+          <Layer
+            id="coverage-fill"
+            type="fill"
+            paint={{
+              "fill-color": "#0A84FF",
+              "fill-opacity": 0.09,
+            }}
+          />
+          <Layer
+            id="coverage-outline"
+            type="line"
+            paint={{
+              "line-color": "#0A84FF",
+              "line-width": 2,
+              "line-opacity": 0.75,
+            }}
+          />
+        </Source>
+
+        {draftGeoJson ? (
+          <Source id="draft-zone" type="geojson" data={draftGeoJson}>
+            <Layer
+              id="draft-fill"
+              type="fill"
+              paint={{
+                "fill-color": "#30D158",
+                "fill-opacity": 0.08,
+              }}
+            />
+            <Layer
+              id="draft-outline"
+              type="line"
+              paint={{
+                "line-color": "#30D158",
+                "line-width": 2,
+                "line-dasharray": [2, 1],
+              }}
+            />
+          </Source>
+        ) : null}
+
+        {deployedDrones.map((drone) => (
+          <Marker
+            key={drone.id}
+            longitude={drone.lng}
+            latitude={drone.lat}
+            anchor="center"
+          >
+            <div className="relative flex items-center justify-center">
+              <span className="absolute h-8 w-8 rounded-full bg-[oklch(0.65_0.18_220/22%)] blur-[1px]" />
+              <span className="relative flex h-7 w-7 items-center justify-center rounded-full border border-[oklch(0.95_0_0/70%)] bg-[oklch(0.65_0.18_220/92%)] shadow-lg">
+                <Plane className="h-3.5 w-3.5 rotate-45 text-[oklch(0.98_0_0)]" strokeWidth={2.25} />
+              </span>
+            </div>
+          </Marker>
+        ))}
 
         {uniqueFrames.map((frame) => {
           const level = getSeverityLevel(frame.severity)
