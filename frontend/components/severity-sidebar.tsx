@@ -5,12 +5,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Circle,
+  Loader2,
   Plane,
   Play,
   Radar,
   RefreshCcw,
   Send,
   Square,
+  Zap,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SeverityBadge } from "@/components/severity-badge"
@@ -32,12 +34,14 @@ interface SeveritySidebarProps {
   maxVisibleReports: number
   autoPan: boolean
   showHeatmap: boolean
+  show3dBuildings: boolean
   simulationIntervalMs: number
   droneSpeedMs: number
   spiralSpacingMeters: number
   droneAltitudeM: number
   onAutoPanChange: (next: boolean) => void
   onShowHeatmapChange: (next: boolean) => void
+  onShow3dBuildingsChange: (next: boolean) => void
   onSimulationIntervalChange: (next: number) => void
   onDroneSpeedChange: (next: number) => void
   onSpiralSpacingChange: (next: number) => void
@@ -72,6 +76,13 @@ interface SeveritySidebarProps {
   customImageSelected: boolean
   onSelectCustomImage: (file: File | null) => void
   onSendTestImage: () => void
+
+  // ML model switcher
+  useGemini: boolean
+  geminiAvailable: boolean
+  activeModelName: string
+  settingsLoading: boolean
+  onUseGeminiChange: (next: boolean) => void
 }
 
 export function SeveritySidebar({
@@ -82,12 +93,14 @@ export function SeveritySidebar({
   maxVisibleReports,
   autoPan,
   showHeatmap,
+  show3dBuildings,
   simulationIntervalMs,
   droneSpeedMs,
   spiralSpacingMeters,
   droneAltitudeM,
   onAutoPanChange,
   onShowHeatmapChange,
+  onShow3dBuildingsChange,
   onSimulationIntervalChange,
   onDroneSpeedChange,
   onSpiralSpacingChange,
@@ -120,6 +133,11 @@ export function SeveritySidebar({
   customImageSelected,
   onSelectCustomImage,
   onSendTestImage,
+  useGemini,
+  geminiAvailable,
+  activeModelName,
+  settingsLoading,
+  onUseGeminiChange,
 }: SeveritySidebarProps) {
   const sorted = [...frames].sort((a, b) => b.severity - a.severity)
   const visibleFrames = sorted.slice(0, maxVisibleReports)
@@ -262,6 +280,55 @@ export function SeveritySidebar({
                   checked={showHeatmap}
                   onCheckedChange={onShowHeatmapChange}
                 />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <Label htmlFor="3d-buildings">3D buildings</Label>
+                <Switch
+                  id="3d-buildings"
+                  checked={show3dBuildings}
+                  onCheckedChange={onShow3dBuildingsChange}
+                />
+              </div>
+
+              <Separator />
+
+              {/* ── ML Model Selector ── */}
+              <div className="space-y-3 rounded-xl border border-[oklch(0.28_0.015_260/50%)] bg-[oklch(0.12_0.008_260/40%)] p-3">
+                <div className="flex items-center gap-2">
+                  <Zap className="h-3.5 w-3.5 text-[oklch(0.72_0.19_280)]" />
+                  <span className="text-sm font-medium text-[oklch(0.92_0_0)]">ML Model</span>
+                  {settingsLoading && (
+                    <Loader2 className="ml-auto h-3.5 w-3.5 animate-spin text-[oklch(0.60_0_0)]" />
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label
+                      htmlFor="use-gemini"
+                      className={cn(!geminiAvailable && "text-[oklch(0.50_0_0)]")}
+                    >
+                      Gemini Vision API
+                    </Label>
+                    {!geminiAvailable && (
+                      <p className="text-[11px] text-[oklch(0.50_0_0)]">No API key configured</p>
+                    )}
+                  </div>
+                  <Switch
+                    id="use-gemini"
+                    checked={useGemini}
+                    disabled={settingsLoading || !geminiAvailable}
+                    onCheckedChange={onUseGeminiChange}
+                  />
+                </div>
+
+                <div className="flex items-center gap-1.5 rounded-lg bg-[oklch(0.08_0_0/60%)] px-2.5 py-1.5">
+                  <span className="text-[10px] uppercase tracking-wider text-[oklch(0.45_0_0)]">Active</span>
+                  <span className="ml-1 truncate font-mono text-[11px] text-[oklch(0.70_0.12_280)]">
+                    {activeModelName || "—"}
+                  </span>
+                </div>
               </div>
 
               <Separator />

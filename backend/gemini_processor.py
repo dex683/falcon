@@ -55,7 +55,7 @@ SEVERITY_LABELS = {
     10: "Catastrophic",
 }
 
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 ANALYSIS_PROMPT = """You are an expert disaster-response analyst reviewing a UAV aerial image.
 Analyse the image and respond with ONLY a valid JSON object — no markdown, no explanation.

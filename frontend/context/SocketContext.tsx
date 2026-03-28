@@ -56,6 +56,9 @@ interface SocketContextValue {
   latestTelemetry: DroneTelemetry | null
   simulationStatus: SimulationStatus | null
 
+  // Raw socket (for attaching custom listeners)
+  socket: import("socket.io-client").Socket | null
+
   // Shared state (synced across all clients via server)
   syncedDrones: DeployedDrone[]
   syncedZones: CoverageCircle[]
@@ -84,6 +87,7 @@ const SocketContext = createContext<SocketContextValue>({
   lastFrameAt: null,
   latestTelemetry: null,
   simulationStatus: null,
+  socket: null,
   syncedDrones: [],
   syncedZones: [],
   syncedSimRunning: false,
@@ -280,6 +284,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         lastFrameAt,
         latestTelemetry,
         simulationStatus,
+        socket: socketRef.current,
         syncedDrones,
         syncedZones,
         syncedSimRunning,

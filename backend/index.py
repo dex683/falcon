@@ -41,24 +41,36 @@ socketio = SocketIO(
 )
 
 # ─── Detector Selection ─────────────────────────────────────────────
-_use_gemini = os.environ.get("USE_GEMINI_FALLBACK", "0").strip().lower() in (
+
+_GEMINI_ENV_ENABLED = os.environ.get("USE_GEMINI_FALLBACK", "0").strip().lower() in (
     "1", "true", "yes", "on"
 )
+_GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
-if _use_gemini:
-    try:
-        from gemini_processor import GeminiDamageDetector
-        detector = GeminiDamageDetector()
-        _detector_name = "GeminiDamageDetector (gemini-2.0-flash)"
-        print("[Detector] ✅ Using Gemini Vision API for damage detection")
-    except Exception as _e:
-        print(f"[Detector] ⚠️  Gemini init failed ({_e}), falling back to mock model")
-        detector = DamageDetector(min_detections=1, max_detections=5)
-        _detector_name = "DamageDetector-Mock (fire|flood|destruction|good)"
-else:
-    detector = DamageDetector(min_detections=1, max_detections=5)
-    _detector_name = "DamageDetector-Mock (fire|flood|destruction|good)"
-    print("[Detector] Using Mock ML model (set USE_GEMINI_FALLBACK=1 to enable Gemini)")
+
+def _make_detector(use_gemini: bool):
+    """Build and return a detector instance. Also returns (detector, name, success_flag)."""
+    if use_gemini:
+        if not _GEMINI_API_KEY:
+            print("[Detector] ⚠️  GEMINI_API_KEY not set — falling back to Mock ML")
+            return DamageDetector(min_detections=1, max_detections=5), "DamageDetector-Mock (fire|flood|destruction|good)", False
+        try:
+            from gemini_processor import GeminiDamageDetector
+            d = GeminiDamageDetector()
+            name = "GeminiDamageDetector"
+            print("[Detector] ✅ Using Gemini Vision API for damage detection")
+            return d, name, True
+        except Exception as _e:
+            print(f"[Detector] ⚠️  Gemini init failed ({_e}), falling back to Mock ML")
+            return DamageDetector(min_detections=1, max_detections=5), "DamageDetector-Mock", False
+    else:
+        print("[Detector] Using Mock ML model (set USE_GEMINI_FALLBACK=1 to enable Gemini)")
+        return DamageDetector(min_detections=1, max_detections=5), "DamageDetector-Mock", True
+
+
+# Global mutable detector state
+_active_use_gemini: bool = _GEMINI_ENV_ENABLED
+detector, _detector_name, _ = _make_detector(_active_use_gemini)
 
 # ─── Services ────────────────────────────────────────────────────────
 drone_sim = DroneSimulator(socketio, detector=detector)
@@ -112,6 +124,60 @@ def api_status():
         "severity_scale": "1–10",
         "frames_processed": detector.frame_count,
     })
+
+
+@app.route("/api/settings", methods=["GET"])
+def get_settings():
+    """Return current runtime settings."""
+    return jsonify({
+        "use_gemini": _active_use_gemini,
+        "gemini_available": bool(_GEMINI_API_KEY),
+        "ml_model": _detector_name,
+    })
+
+
+@app.route("/api/settings", methods=["POST"])
+def update_settings():
+    """Hot-swap the active detector at runtime."""
+    global detector, _detector_name, _active_use_gemini
+
+    data = request.get_json(silent=True) or {}
+    if "use_gemini" not in data:
+        return jsonify({"error": "Missing 'use_gemini' field"}), 400
+
+    want_gemini = bool(data["use_gemini"])
+    if want_gemini == _active_use_gemini:
+        # No change needed
+        return jsonify({
+            "use_gemini": _active_use_gemini,
+            "gemini_available": bool(_GEMINI_API_KEY),
+            "ml_model": _detector_name,
+        })
+
+    new_detector, new_name, ok = _make_detector(want_gemini)
+    if ok or not want_gemini:
+        detector = new_detector
+        _detector_name = new_name
+        _active_use_gemini = want_gemini if ok else False
+        # Update simulator reference so new captures use the new detector
+        drone_sim.detector = detector
+        print(f"[Settings] Detector switched → {_detector_name}")
+    else:
+        # Gemini init failed; stay on current detector
+        return jsonify({
+            "error": "Gemini initialisation failed. Check GEMINI_API_KEY.",
+            "use_gemini": _active_use_gemini,
+            "gemini_available": bool(_GEMINI_API_KEY),
+            "ml_model": _detector_name,
+        }), 500
+
+    payload = {
+        "use_gemini": _active_use_gemini,
+        "gemini_available": bool(_GEMINI_API_KEY),
+        "ml_model": _detector_name,
+    }
+    socketio.emit("settings_changed", payload)
+    return jsonify(payload)
 
 
 @app.route("/api/simulation/status")
