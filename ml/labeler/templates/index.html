@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Disaster Image Labeler</title>
+  <meta name="description" content="Quickly label disaster drone images as low, medium, high, or severe for ML dataset creation." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<!-- ─── HEADER ─────────────────────────────────────────── -->
+<header class="site-header">
+  <div class="header-inner">
+    <div class="brand">
+      <span class="brand-icon">🛰️</span>
+      <div>
+        <h1 class="brand-title">Disaster Image Labeler</h1>
+        <p class="brand-sub">Build training datasets from drone imagery</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button id="exportBtn" class="btn btn-ghost" onclick="openExportModal()">
+        <span>⬇</span> Export Dataset
+      </button>
+      <button class="btn btn-danger-ghost" onclick="confirmReset()">
+        <span>↺</span> Reset Labels
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- ─── FOLDER PICKER ──────────────────────────────────── -->
+<div class="folder-bar" id="folderBar">
+  <div class="folder-bar-inner">
+    <label class="folder-label">📁 Image Folder</label>
+    <div class="folder-input-row">
+      <input type="text" id="folderInput" class="folder-input"
+             placeholder="Paste the full path to your images folder…"
+             value="{{ folder }}" />
+      <button class="btn btn-primary" id="loadBtn" onclick="setFolder()">Load Images</button>
+    </div>
+    <p id="folderError" class="folder-error hidden"></p>
+  </div>
+</div>
+
+<!-- ─── PROGRESS BAR ───────────────────────────────────── -->
+<div class="progress-section" id="progressSection" style="{{ '' if folder else 'display:none' }}">
+  <div class="progress-inner">
+    <div class="progress-stats">
+      <div class="stat-pill stat-total">
+        <span class="stat-num" id="statTotal">{{ stats.total }}</span>
+        <span class="stat-lbl">Total</span>
+      </div>
+      <div class="stat-pill stat-labeled">
+        <span class="stat-num" id="statLabeled">{{ stats.labeled }}</span>
+        <span class="stat-lbl">Labeled</span>
+      </div>
+      <div class="stat-pill stat-unlabeled">
+        <span class="stat-num" id="statUnlabeled">{{ stats.unlabeled }}</span>
+        <span class="stat-lbl">Remaining</span>
+      </div>
+      {% for lbl in label_list %}
+      <div class="stat-pill" style="--pill-color:{{ label_colors[lbl] }}">
+        <span class="stat-num" id="statCount_{{ lbl }}">{{ stats.counts[lbl] }}</span>
+        <span class="stat-lbl">{{ lbl|capitalize }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="progress-bar-wrap">
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" id="progressFill" style="width: {{ stats.percent }}%"></div>
+      </div>
+      <span class="progress-pct" id="progressPct">{{ stats.percent }}%</span>
+    </div>
+  </div>
+</div>
+
+<!-- ─── MAIN CONTENT ───────────────────────────────────── -->
+<main class="main-content" id="mainContent">
+
+  {% if not folder %}
+  <!-- Empty state -->
+  <div class="empty-state" id="emptyState">
+    <div class="empty-icon">🛸</div>
+    <h2>No folder loaded</h2>
+    <p>Enter the path to a folder containing disaster images above and click <strong>Load Images</strong>.</p>
+  </div>
+  {% elif not images %}
+  <div class="empty-state">
+    <div class="empty-icon">🖼️</div>
+    <h2>No images found</h2>
+    <p>The folder exists but contains no supported image files (JPG, PNG, BMP, GIF, TIFF, WEBP).</p>
+  </div>
+  {% else %}
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <label class="toolbar-label">Filter:</label>
+      <div class="filter-pills" id="filterPills">
+        <button class="filter-pill active" data-filter="all" onclick="setFilter('all', this)">All</button>
+        <button class="filter-pill" data-filter="unlabeled" onclick="setFilter('unlabeled', this)">Unlabeled</button>
+        {% for lbl in label_list %}
+        <button class="filter-pill" data-filter="{{ lbl }}" onclick="setFilter('{{ lbl }}', this)" style="--pill-accent:{{ label_colors[lbl] }}">
+          <span class="pill-dot" style="background:{{ label_colors[lbl] }}"></span>
+          {{ lbl|capitalize }}
+        </button>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="toolbar-right">
+      <label class="toolbar-label" for="searchInput">🔍</label>
+      <input type="text" id="searchInput" class="search-input" placeholder="Search filename…" oninput="applyFilters()" />
+      <span class="visible-count" id="visibleCount"></span>
+    </div>
+  </div>
+
+  <!-- Keyboard hint -->
+  <div class="kbd-hint">
+    <span>⌨️ Keyboard shortcuts:</span>
+    <kbd>1</kbd> Low &nbsp;
+    <kbd>2</kbd> Medium &nbsp;
+    <kbd>3</kbd> High &nbsp;
+    <kbd>4</kbd> Severe &nbsp;
+    <kbd>←</kbd><kbd>→</kbd> Navigate &nbsp;
+    <kbd>ESC</kbd> Close
+  </div>
+
+  <!-- Image Grid -->
+  <div class="image-grid" id="imageGrid">
+    {% for img in images %}
+    {% set lbl = labels.get(img, '') %}
+    <div class="image-card {% if lbl %}labeled{% endif %}"
+         id="card_{{ loop.index0 }}"
+         data-filename="{{ img }}"
+         data-label="{{ lbl }}"
+         data-index="{{ loop.index0 }}"
+         onclick="openViewer({{ loop.index0 }})">
+      <div class="card-img-wrap">
+        <img src="/image/{{ img }}" alt="{{ img }}" loading="lazy" class="card-img" />
+        {% if lbl %}
+        <div class="card-badge" style="background:{{ label_colors[lbl] }}">{{ lbl|capitalize }}</div>
+        {% else %}
+        <div class="card-badge card-badge-unlabeled">Unlabeled</div>
+        {% endif %}
+      </div>
+      <div class="card-footer">
+        <span class="card-filename" title="{{ img }}">{{ img }}</span>
+        <div class="card-quick-labels">
+          {% for l in label_list %}
+          <button class="ql-btn {% if lbl == l %}ql-active{% endif %}"
+                  style="--ql-color:{{ label_colors[l] }}"
+                  title="{{ l|capitalize }}"
+                  onclick="event.stopPropagation(); quickLabel('{{ img }}', '{{ l }}', {{ loop.index0 - 1 }})">
+            {{ l[0]|upper }}
+          </button>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</main>
+
+<!-- ─── IMAGE VIEWER MODAL ─────────────────────────────── -->
+<div class="modal-overlay hidden" id="viewerOverlay" onclick="closeViewer()">
+  <div class="viewer-container" onclick="event.stopPropagation()">
+    <button class="viewer-close" onclick="closeViewer()">✕</button>
+    <button class="viewer-nav viewer-prev" id="viewerPrev" onclick="navigateViewer(-1)">‹</button>
+    <button class="viewer-nav viewer-next" id="viewerNext" onclick="navigateViewer(1)">›</button>
+
+    <div class="viewer-img-wrap">
+      <img id="viewerImg" src="" alt="" class="viewer-img" />
+    </div>
+
+    <div class="viewer-bottom">
+      <div class="viewer-info">
+        <span id="viewerFilename" class="viewer-fname"></span>
+        <span id="viewerCounter" class="viewer-counter"></span>
+      </div>
+      <div class="viewer-label-bar">
+        {% for lbl in label_list %}
+        <button id="vlBtn_{{ lbl }}" class="vl-btn" data-label="{{ lbl }}"
+                style="--vl-color:{{ label_colors[lbl] }}"
+                onclick="setViewerLabel('{{ lbl }}')">
+          <span class="vl-dot"></span>
+          {{ lbl|capitalize }}
+        </button>
+        {% endfor %}
+        <button class="vl-btn vl-clear" onclick="clearViewerLabel()">✕ Clear</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── EXPORT MODAL ───────────────────────────────────── -->
+<div class="modal-overlay hidden" id="exportOverlay" onclick="closeExportModal()">
+  <div class="export-modal" onclick="event.stopPropagation()">
+    <h2 class="export-title">📦 Export Dataset</h2>
+    <p class="export-desc">Choose how to export your labeled images:</p>
+    <div class="export-options">
+      <label class="export-option">
+        <input type="radio" name="exportFmt" value="csv" checked />
+        <div class="export-option-body">
+          <span class="export-opt-icon">📄</span>
+          <div>
+            <strong>CSV File</strong>
+            <small>filename, filepath, label — ready for pandas / sklearn</small>
+          </div>
+        </div>
+      </label>
+      <label class="export-option">
+        <input type="radio" name="exportFmt" value="folders" />
+        <div class="export-option-body">
+          <span class="export-opt-icon">📂</span>
+          <div>
+            <strong>Folder Structure</strong>
+            <small>Copies images into low/, medium/, high/, severe/ sub-folders + CSV</small>
+          </div>
+        </div>
+      </label>
+      <label class="export-option">
+        <input type="radio" name="exportFmt" value="json" />
+        <div class="export-option-body">
+          <span class="export-opt-icon">{ }</span>
+          <div>
+            <strong>JSON Annotations</strong>
+            <small>Structured JSON with metadata &amp; all annotations</small>
+          </div>
+        </div>
+      </label>
+    </div>
+    <div class="export-actions">
+      <button class="btn btn-ghost" onclick="closeExportModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="doExport()">Export</button>
+    </div>
+    <p id="exportResult" class="export-result hidden"></p>
+  </div>
+</div>
+
+<!-- ─── TOAST ──────────────────────────────────────────── -->
+<div id="toast" class="toast hidden"></div>
+
+<!-- ─── DATA ───────────────────────────────────────────── -->
+<script>
+  const ALL_IMAGES   = {{ images | tojson }};
+  const LABELS_MAP   = {{ labels | tojson }};
+  const LABEL_COLORS = {{ label_colors | tojson }};
+  const LABEL_LIST   = {{ label_list | tojson }};
+</script>
+<script src="/static/app.js"></script>
+</body>
+</html>
