@@ -85,7 +85,7 @@ export default function DashboardPage() {
   const [autoPan, setAutoPan] = useState(true)
   const [showHeatmap, setShowHeatmap] = useState(false)
   const [show3dBuildings, setShow3dBuildings] = useState(true)
-  const [simulationIntervalMs, setSimulationIntervalMs] = useState(2200)
+  const [simulationIntervalMs, setSimulationIntervalMs] = useState(250)
   const [maxVisibleReports, setMaxVisibleReports] = useState(120)
   const [droneSpeedMs, setDroneSpeedMs] = useState(DEFAULT_DRONE_SPEED_MS)
   const [droneAltitudeM, setDroneAltitudeM] = useState(DEFAULT_DRONE_ALTITUDE_M)
@@ -365,54 +365,39 @@ export default function DashboardPage() {
     setDraftCircle(null)
     setSimulationDrawMode(false)
 
-    void (async () => {
-      try {
-        const res = await fetch(`${backendBase}/api/geocode?lat=${zone.centerLat}&lng=${zone.centerLng}`)
-        if (res.ok) {
-          const data = await res.json()
-          zone.locationName = data.location_name
-          zone.populationDensity = data.population_density
-          zone.addressType = data.address_type
-        }
-      } catch (e) {
-        console.error("Geocoding failed:", e)
+    // Pre-compute lawnmower waypoints for the zone (shared by all drones in this zone)
+    const zoneWaypoints = generateLawnmowerWaypoints(
+      zone.centerLat,
+      zone.centerLng,
+      zone.radiusMeters,
+    )
+
+    const count = Math.max(1, Math.min(8, dronesPerDeployment))
+    const freshDrones: DeployedDrone[] = Array.from({ length: count }, (_, index) => {
+      // Each drone starts at a different strip to spread coverage
+      const startWaypointIndex = Math.floor((index / Math.max(1, count)) * Math.max(0, zoneWaypoints.length - 1))
+      const startWaypoint = zoneWaypoints[startWaypointIndex] ?? zoneWaypoints[0]
+
+      return {
+        id: `DRONE-${String(droneCounterRef.current++).padStart(3, "0")}`,
+        label: `Drone ${index + 1}`,
+        zoneId,
+        centerLat: zone.centerLat,
+        centerLng: zone.centerLng,
+        radiusMeters: zone.radiusMeters,
+        lat: startWaypoint ? startWaypoint[0] : zone.centerLat,
+        lng: startWaypoint ? startWaypoint[1] : zone.centerLng,
+        waypoints: zoneWaypoints,
+        waypointIndex: startWaypointIndex,
+        waypointProgressMeters: 0,
+        pathCompleted: false,
+        updatedAt: Date.now(),
       }
+    })
 
-      // Pre-compute lawnmower waypoints for the zone (shared by all drones in this zone)
-      const zoneWaypoints = generateLawnmowerWaypoints(
-        zone.centerLat,
-        zone.centerLng,
-        zone.radiusMeters,
-      )
-
-      const count = Math.max(1, Math.min(8, dronesPerDeployment))
-      const freshDrones: DeployedDrone[] = Array.from({ length: count }, (_, index) => {
-        // Each drone starts at a different strip to spread coverage
-        const startWaypointIndex = Math.floor((index / Math.max(1, count)) * Math.max(0, zoneWaypoints.length - 1))
-        const startWaypoint = zoneWaypoints[startWaypointIndex] ?? zoneWaypoints[0]
-
-        return {
-          id: `DRONE-${String(droneCounterRef.current++).padStart(3, "0")}`,
-          label: `Drone ${index + 1}`,
-          zoneId,
-          centerLat: zone.centerLat,
-          centerLng: zone.centerLng,
-          radiusMeters: zone.radiusMeters,
-          lat: startWaypoint ? startWaypoint[0] : zone.centerLat,
-          lng: startWaypoint ? startWaypoint[1] : zone.centerLng,
-          waypoints: zoneWaypoints,
-          waypointIndex: startWaypointIndex,
-          waypointProgressMeters: 0,
-          pathCompleted: false,
-          updatedAt: Date.now(),
-        }
-      })
-
-      // Broadcast to all clients via server
-      emitDeployDrones(freshDrones, zone)
-      queueCapturesForDrones(freshDrones, "deploy")
-    })()
-  }, [backendBase, draftCircle, dronesPerDeployment, emitDeployDrones, queueCapturesForDrones])
+    // Broadcast to all clients via server
+    emitDeployDrones(freshDrones, zone)
+  }, [draftCircle, dronesPerDeployment, emitDeployDrones])
 
   const captureNow = useCallback(() => {
     if (deployedDrones.length === 0) return
@@ -541,10 +526,11 @@ export default function DashboardPage() {
   }, [amISimulating, simulationRunning, deployedDrones.length, droneSpeedMs, simulationIntervalMs])
 
   // Only show backend-processed frames on the map/severity list.
-  const combinedFrames = useMemo(
-    () => [...frames].sort((a, b) => b.receivedAt - a.receivedAt),
-    [frames]
-  )
+  const combinedFrames = useMemo(() => {
+    const backendIds = new Set(frames.map(f => f.frame_id))
+    const pendingSimulated = simulatedFrames.filter(f => !backendIds.has(f.frame_id))
+    return [...frames, ...pendingSimulated].sort((a, b) => b.receivedAt - a.receivedAt)
+  }, [frames, simulatedFrames])
 
   const combinedLatestFrame = combinedFrames[0] ?? latestFrame
 
@@ -712,7 +698,7 @@ export default function DashboardPage() {
           setAutoPan(true)
           setShowHeatmap(false)
           setShow3dBuildings(true)
-          setSimulationIntervalMs(2200)
+          setSimulationIntervalMs(250)
           setMaxVisibleReports(120)
           setDroneSpeedMs(DEFAULT_DRONE_SPEED_MS)
           setDroneAltitudeM(DEFAULT_DRONE_ALTITUDE_M)

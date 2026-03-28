@@ -400,6 +400,45 @@ def handle_client_deploy_drones(data):
     zone = data.get("zone")
     if zone:
         shared_state["coverage_zones"] = ([zone] + shared_state["coverage_zones"])[:80]
+        
+        # Async enrich with OSM Nominatim
+        def enrich_zone():
+            try:
+                lat, lng = zone.get("centerLat"), zone.get("centerLng")
+                url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lng}&zoom=14&addressdetails=1"
+                headers = {"User-Agent": "SkeemDroneMapper/1.0"}
+                resp = requests.get(url, headers=headers, timeout=5)
+                if resp.status_code == 200:
+                    r_data = resp.json()
+                    display_name = r_data.get("display_name", f"{lat}, {lng}")
+                    location_type = r_data.get("type", "unknown")
+                    addresstype = r_data.get("addresstype", location_type)
+                    
+                    density = 1000
+                    if addresstype in ["city", "town", "borough", "commercial", "retail"]:
+                        density = 8500
+                    elif addresstype in ["suburb", "neighbourhood", "residential", "quarter"]:
+                        density = 4500
+                    elif addresstype in ["village", "hamlet", "municipality"]:
+                        density = 800
+                    elif addresstype in ["county", "state", "region", "country", "farm", "forest", "water"]:
+                        density = 50
+
+                    # Update the exact zone in shared state
+                    for z in shared_state["coverage_zones"]:
+                        if z.get("id") == zone.get("id"):
+                            z["locationName"] = display_name
+                            z["populationDensity"] = density
+                            z["addressType"] = addresstype
+                            break
+                    
+                    # Re-broadcast state so clients get the metadata
+                    broadcast_state()
+            except Exception as e:
+                print(f"[Worker] Geocode failed: {e}")
+
+        eventlet.spawn(enrich_zone)
+
     shared_state["deployed_drones"] = drones + [
         d for d in shared_state["deployed_drones"]
         if d.get("id") not in {dr.get("id") for dr in drones}
