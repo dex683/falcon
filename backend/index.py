@@ -56,9 +56,13 @@ if _use_gemini:
         detector = DamageDetector(min_detections=1, max_detections=5)
         _detector_name = "DamageDetector-Mock (fire|flood|destruction|good)"
 else:
-    detector = DamageDetector(min_detections=1, max_detections=5)
-    _detector_name = "DamageDetector-Mock (fire|flood|destruction|good)"
-    print("[Detector] Using Mock ML model (set USE_GEMINI_FALLBACK=1 to enable Gemini)")
+    try:
+        detector = DamageDetector(min_detections=1, max_detections=5)
+        _detector_name = "DamageDetector-MobileNetV2 (no_damage|low|medium|high|severe)"
+        print("[Detector] ✅ Using MobileNetV2 damage classifier (set USE_GEMINI_FALLBACK=1 for Gemini)")
+    except Exception as _e:
+        print(f"[Detector] ⚠️  Model load failed ({_e}), server cannot start without model")
+        raise
 
 # ─── Services ────────────────────────────────────────────────────────
 drone_sim = DroneSimulator(socketio, detector=detector)
@@ -108,7 +112,7 @@ def api_status():
         "connected_clients": len(connected_clients),
         "simulation": drone_sim.get_status(),
         "ml_model": _detector_name,
-        "categories": ["fire", "flood", "destruction", "good"],
+        "categories": ["no_damage", "low", "medium", "high", "severe"],
         "severity_scale": "1–10",
         "frames_processed": detector.frame_count,
     })

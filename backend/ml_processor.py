@@ -1,52 +1,60 @@
 """
-ML Damage Detection Processor — Mock Model
---------------------------------------------
-Mocked damage detector that simulates predictions with the target categories:
-  - fire
-  - flood
-  - destruction
-  - good
+ML Damage Detection Processor — Real MobileNetV2 Model
+-------------------------------------------------------
+Uses the fine-tuned MobileNetV2 damage classifier (damage_classifier.pth)
+to run actual inference on drone imagery.
+
+Model output classes (5 severity levels):
+  - no_damage  (index 0)
+  - low        (index 1)
+  - medium     (index 2)
+  - high       (index 3)
+  - severe     (index 4)
 
 Each prediction returns:
-  - type: one of the 4 categories
-  - severity: integer scale 1–10 (1 = minimal, 10 = catastrophic)
+  - type: one of "damage" or "good"
+  - severity: integer scale 1–10
   - severity_label: human-readable severity text
   - confidence: model confidence score (0.0–1.0)
-
-Drop-in replaceable with the real YOLOv8 model by implementing the same
-`predict()` and `process_frame()` interfaces.
+  - damage_class: raw model class label
+  - probabilities: full probability distribution across all 5 classes
 """
 
 import base64
 import io
-import random
+import os
 import time
 import uuid
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision import models, transforms
 from PIL import Image, ImageDraw, ImageFont
 
-# ─── Damage Categories ──────────────────────────────────────────────
+# ─── Model Configuration ────────────────────────────────────────────
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "ml", "damage_classifier.pth")
+IMG_SIZE = 224
+CLASS_ORDER = ["no_damage", "low", "medium", "high", "severe"]
+
+# ─── Damage Categories (for annotation colours) ─────────────────────
 DAMAGE_CATEGORIES = {
-    "fire": {
-        "color": "#FF4422",
-        "severity_range": (3, 10),
-        "weight": 0.25,  # probability weight
-    },
-    "flood": {
-        "color": "#2288FF",
-        "severity_range": (2, 9),
-        "weight": 0.25,
-    },
-    "destruction": {
-        "color": "#FF2266",
-        "severity_range": (5, 10),
-        "weight": 0.25,
-    },
-    "good": {
-        "color": "#44CC66",
-        "severity_range": (1, 1),  # always severity 1 (no damage)
-        "weight": 0.25,
-    },
+    "no_damage": {"color": "#44CC66", "label": "No Damage"},
+    "low":       {"color": "#FFD700", "label": "Low Damage"},
+    "medium":    {"color": "#FF8C00", "label": "Medium Damage"},
+    "high":      {"color": "#FF4422", "label": "High Damage"},
+    "severe":    {"color": "#FF2266", "label": "Severe Damage"},
+    "good":      {"color": "#44CC66", "label": "No Damage"},
+    "damage":    {"color": "#FF4422", "label": "Damage Detected"},
+}
+
+# Map model class → severity range (mapped onto 1–10 scale)
+CLASS_SEVERITY_MAP = {
+    "no_damage": 1,
+    "low":       3,
+    "medium":    5,
+    "high":      7,
+    "severe":    9,
 }
 
 SEVERITY_LABELS = {
@@ -67,10 +75,56 @@ def _get_severity_label(severity: int) -> str:
     return SEVERITY_LABELS.get(severity, "Unknown")
 
 
+def _build_model(num_classes: int) -> nn.Module:
+    """Build the MobileNetV2 model with the custom classifier head."""
+    model = models.mobilenet_v2(weights=None)
+    in_features = model.classifier[1].in_features
+    model.classifier = nn.Sequential(
+        nn.Dropout(0.4),
+        nn.Linear(in_features, 256),
+        nn.ReLU(),
+        nn.Dropout(0.3),
+        nn.Linear(256, num_classes),
+    )
+    return model
+
+
+def _compute_severity(pred_class: str, confidence: float, probs: list) -> int:
+    """
+    Compute a 1–10 severity score from the model prediction.
+
+    Uses the base severity for the predicted class, then adjusts ±1
+    based on confidence and the probability distribution.
+    """
+    base = CLASS_SEVERITY_MAP.get(pred_class, 5)
+
+    if pred_class == "no_damage":
+        return 1
+
+    # Adjust severity based on confidence
+    if confidence > 0.90:
+        adjustment = 1
+    elif confidence < 0.60:
+        adjustment = -1
+    else:
+        adjustment = 0
+
+    severity = base + adjustment
+    return max(1, min(10, severity))
+
+
+# ─── Image Transform (matches training pipeline) ────────────────────
+_transform = transforms.Compose([
+    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+])
+
+
 class DamageDetector:
     """
-    Mock damage detector for development.
-    Swap this class for the real YOLOv8 model by keeping the same interface.
+    Real MobileNetV2-based damage detector.
+    Drop-in replacement — same predict() and process_frame() interface.
     """
 
     def __init__(self, min_detections: int = 1, max_detections: int = 5):
@@ -78,44 +132,73 @@ class DamageDetector:
         self.max_detections = max_detections
         self.frame_count = 0
 
+        # ── Load the model ───────────────────────────────────────────
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        resolved_path = os.path.abspath(MODEL_PATH)
+        if not os.path.exists(resolved_path):
+            raise FileNotFoundError(
+                f"Model file not found: {resolved_path}\n"
+                f"Place damage_classifier.pth in the ml/ directory."
+            )
+
+        self.model = _build_model(len(CLASS_ORDER))
+        checkpoint = torch.load(resolved_path, map_location=self.device, weights_only=False)
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+        self.model.to(self.device).eval()
+
+        # Use class names from checkpoint if available
+        self.class_order = checkpoint.get("class_names", CLASS_ORDER)
+
+        print(f"[ML] ✅ Loaded damage_classifier.pth on {self.device}")
+        print(f"[ML]    Classes: {self.class_order}")
+
     # ─── Single Image Prediction (Simple API) ────────────────────────
 
     def predict(self, image_b64: str) -> dict:
         """
-        Predict damage type and severity for a single image.
+        Predict damage severity for a single image.
 
         Args:
             image_b64: Base64-encoded image string (JPEG/PNG)
 
         Returns:
             dict with keys:
-                - type: "fire" | "flood" | "destruction" | "good"
+                - type: "damage" | "good"
                 - severity: int 1–10
                 - severity_label: human-readable severity
                 - confidence: float 0.0–1.0
+                - damage_class: raw model class (no_damage|low|medium|high|severe)
+                - probabilities: dict of class → probability
         """
-        # Simulate model inference delay (50–200ms)
-        time.sleep(random.uniform(0.05, 0.2))
+        # Decode base64 → PIL Image
+        image_data = base64.b64decode(image_b64)
+        image = Image.open(io.BytesIO(image_data)).convert("RGB")
 
-        # Pick a category weighted randomly
-        categories = list(DAMAGE_CATEGORIES.keys())
-        weights = [DAMAGE_CATEGORIES[c]["weight"] for c in categories]
-        damage_type = random.choices(categories, weights=weights, k=1)[0]
+        # Transform and run inference
+        tensor = _transform(image).unsqueeze(0).to(self.device)
 
-        cat = DAMAGE_CATEGORIES[damage_type]
+        with torch.no_grad():
+            logits = self.model(tensor)
+            probs = F.softmax(logits, dim=1).squeeze().tolist()
 
-        if damage_type == "good":
-            severity = 1
-            confidence = round(random.uniform(0.80, 0.99), 2)
-        else:
-            severity = random.randint(*cat["severity_range"])
-            confidence = round(random.uniform(0.55, 0.98), 2)
+        pred_idx = int(torch.tensor(probs).argmax())
+        pred_class = self.class_order[pred_idx]
+        confidence = round(probs[pred_idx], 4)
+
+        # Map to the backend interface
+        damage_type = "good" if pred_class == "no_damage" else "damage"
+        severity = _compute_severity(pred_class, confidence, probs)
 
         return {
             "type": damage_type,
             "severity": severity,
             "severity_label": _get_severity_label(severity),
-            "confidence": confidence,
+            "confidence": round(confidence, 2),
+            "damage_class": pred_class,
+            "probabilities": {
+                cls: round(p * 100, 1) for cls, p in zip(self.class_order, probs)
+            },
         }
 
     # ─── Full Frame Processing (for WebSocket streaming) ─────────────
@@ -145,40 +228,37 @@ class DamageDetector:
         image = Image.open(io.BytesIO(image_data)).convert("RGB")
         width, height = image.size
 
-        # Get the overall prediction for this frame
+        # Run real inference
         prediction = self.predict(image_b64)
 
-        # Generate detections (bounding boxes) based on the prediction
+        # Build detections list
         detections = []
 
         if prediction["type"] != "good":
-            num_detections = random.randint(self.min_detections, self.max_detections)
+            damage_class = prediction["damage_class"]
+            cat_color = DAMAGE_CATEGORIES.get(damage_class, DAMAGE_CATEGORIES["damage"])["color"]
 
-            for _ in range(num_detections):
-                cat = DAMAGE_CATEGORIES[prediction["type"]]
-                det_confidence = round(random.uniform(0.55, 0.98), 2)
-                det_severity = random.randint(*cat["severity_range"])
+            # Create a single centred detection box scaled by severity
+            severity_ratio = prediction["severity"] / 10.0
+            box_w = int(width * max(0.15, severity_ratio * 0.6))
+            box_h = int(height * max(0.15, severity_ratio * 0.6))
+            x1 = (width - box_w) // 2
+            y1 = (height - box_h) // 2
+            x2 = x1 + box_w
+            y2 = y1 + box_h
 
-                # Random bounding box
-                box_w = random.randint(int(width * 0.05), int(width * 0.25))
-                box_h = random.randint(int(height * 0.05), int(height * 0.25))
-                x1 = random.randint(0, max(0, width - box_w))
-                y1 = random.randint(0, max(0, height - box_h))
-                x2 = x1 + box_w
-                y2 = y1 + box_h
+            detections.append({
+                "id": str(uuid.uuid4())[:8],
+                "label": damage_class,
+                "confidence": prediction["confidence"],
+                "severity": prediction["severity"],
+                "severity_label": prediction["severity_label"],
+                "color": cat_color,
+                "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                "area_px": box_w * box_h,
+            })
 
-                detections.append({
-                    "id": str(uuid.uuid4())[:8],
-                    "label": prediction["type"],
-                    "confidence": det_confidence,
-                    "severity": det_severity,
-                    "severity_label": _get_severity_label(det_severity),
-                    "color": cat["color"],
-                    "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-                    "area_px": box_w * box_h,
-                })
-
-        # Annotate the image with bounding boxes
+        # Annotate the image
         annotated_image = self._annotate_image(image, detections, prediction)
 
         # Encode result
@@ -219,13 +299,18 @@ class DamageDetector:
                 font_large = font
 
         # Draw overall prediction banner at the top
-        pred_type = prediction["type"].upper()
+        damage_class = prediction.get("damage_class", prediction["type"])
         pred_severity = prediction["severity"]
-        pred_color = DAMAGE_CATEGORIES[prediction["type"]]["color"]
-        banner_text = f"  {pred_type}  |  Severity: {pred_severity}/10 ({prediction['severity_label']})  "
+        pred_color = DAMAGE_CATEGORIES.get(damage_class, DAMAGE_CATEGORIES["damage"])["color"]
+        conf_pct = prediction["confidence"] * 100
+
+        banner_text = (
+            f"  {damage_class.upper()}  |  "
+            f"Severity: {pred_severity}/10 ({prediction['severity_label']})  |  "
+            f"Conf: {conf_pct:.1f}%  "
+        )
 
         text_bbox = draw.textbbox((0, 0), banner_text, font=font_large)
-        text_w = text_bbox[2] - text_bbox[0]
         text_h = text_bbox[3] - text_bbox[1]
         banner_h = text_h + 16
 
@@ -237,6 +322,40 @@ class DamageDetector:
         draw = ImageDraw.Draw(annotated)
 
         draw.text((10, 8), banner_text, fill=pred_color, font=font_large)
+
+        # Model tag (bottom-right corner)
+        tag = "🧠 MobileNetV2"
+        tag_bbox = draw.textbbox((0, 0), tag, font=font_small)
+        tag_w = tag_bbox[2] - tag_bbox[0]
+        tag_h = tag_bbox[3] - tag_bbox[1]
+        draw.rectangle(
+            [
+                annotated.width - tag_w - 12,
+                annotated.height - tag_h - 10,
+                annotated.width,
+                annotated.height,
+            ],
+            fill=(0, 0, 0, 160),
+        )
+        draw.text(
+            (annotated.width - tag_w - 6, annotated.height - tag_h - 5),
+            tag,
+            fill="#AAAAAA",
+            font=font_small,
+        )
+
+        # Draw probability bar (bottom-left)
+        probs = prediction.get("probabilities", {})
+        if probs:
+            bar_y = annotated.height - 18
+            bar_x = 8
+            for cls_name in self.class_order:
+                prob_val = probs.get(cls_name, 0.0)
+                cls_color = DAMAGE_CATEGORIES.get(cls_name, DAMAGE_CATEGORIES["damage"])["color"]
+                prob_text = f"{cls_name}: {prob_val:.1f}%"
+                draw.text((bar_x, bar_y), prob_text, fill=cls_color, font=font_small)
+                prob_bbox = draw.textbbox((0, 0), prob_text, font=font_small)
+                bar_x += (prob_bbox[2] - prob_bbox[0]) + 12
 
         # Draw bounding boxes for individual detections
         for det in detections:
@@ -299,6 +418,7 @@ class DamageDetector:
                 "type": "good",
                 "severity": 1,
                 "severity_label": "None",
+                "damage_class": "no_damage",
                 "message": "No damage detected — area looks good",
             }
 
@@ -312,10 +432,12 @@ class DamageDetector:
         return {
             "status": "damage_detected",
             "type": prediction["type"],
+            "damage_class": prediction.get("damage_class", "unknown"),
             "severity": prediction["severity"],
             "severity_label": prediction["severity_label"],
             "total_detections": len(detections),
             "damage_types": damage_counts,
             "max_severity": max_severity,
             "max_severity_label": _get_severity_label(max_severity),
+            "probabilities": prediction.get("probabilities", {}),
         }
