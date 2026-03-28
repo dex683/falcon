@@ -47,6 +47,7 @@ export default function DashboardPage() {
     frameCount,
     lastFrameAt,
     sendDroneFrame,
+    socket,
     // Shared synced state
     syncedDrones,
     syncedZones,
@@ -59,10 +60,30 @@ export default function DashboardPage() {
     emitClearSimulation,
   } = useSocket()
 
+  // ─── Backend ML Settings ────────────────────────────────────────────
+  const backendBase = (process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:5001").replace(/\/$/, "")
+  const [useGemini, setUseGemini] = useState(false)
+  const [geminiAvailable, setGeminiAvailable] = useState(false)
+  const [activeModelName, setActiveModelName] = useState("")
+  const [settingsLoading, setSettingsLoading] = useState(false)
+
+  useEffect(() => {
+    fetch(`${backendBase}/api/settings`)
+      .then((r) => r.json())
+      .then((data) => {
+        setUseGemini(data.use_gemini ?? false)
+        setGeminiAvailable(data.gemini_available ?? false)
+        setActiveModelName(data.ml_model ?? "")
+      })
+      .catch(() => { /* backend offline — silently ignore */ })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [activeView, setActiveView] = useState<DashboardView>("map")
   const [autoPan, setAutoPan] = useState(true)
   const [showHeatmap, setShowHeatmap] = useState(false)
+  const [show3dBuildings, setShow3dBuildings] = useState(true)
   const [simulationIntervalMs, setSimulationIntervalMs] = useState(2200)
   const [maxVisibleReports, setMaxVisibleReports] = useState(120)
   const [droneSpeedMs, setDroneSpeedMs] = useState(DEFAULT_DRONE_SPEED_MS)
@@ -500,6 +521,46 @@ export default function DashboardPage() {
     }
   }, [status])
 
+  // ─── Socket: settings_changed sync (multi-tab) ──────────────────────
+  useEffect(() => {
+    if (!socket) return
+    const handler = (data: { use_gemini: boolean; gemini_available: boolean; ml_model: string }) => {
+      setUseGemini(data.use_gemini)
+      setGeminiAvailable(data.gemini_available)
+      setActiveModelName(data.ml_model)
+    }
+    socket.on("settings_changed", handler)
+    return () => { socket.off("settings_changed", handler) }
+  }, [socket])
+
+  const handleUseGeminiChange = useCallback(async (next: boolean) => {
+    setSettingsLoading(true)
+    try {
+      const res = await fetch(`${backendBase}/api/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ use_gemini: next }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        toast({ title: "Model switch failed", description: data.error ?? "Unknown error", variant: "destructive" })
+      } else {
+        setUseGemini(data.use_gemini)
+        setGeminiAvailable(data.gemini_available)
+        setActiveModelName(data.ml_model)
+        toast({
+          title: data.use_gemini ? "Gemini Vision enabled" : "Custom ML enabled",
+          description: data.ml_model,
+        })
+      }
+    } catch {
+      toast({ title: "Model switch failed", description: "Could not reach backend.", variant: "destructive" })
+    } finally {
+      setSettingsLoading(false)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backendBase])
+
   const statusDotColor =
     status === "connected"
       ? "bg-[oklch(0.72_0.19_142)]"
@@ -541,6 +602,7 @@ export default function DashboardPage() {
         latestFrame={combinedLatestFrame}
         autoPan={autoPan}
         showHeatmap={showHeatmap}
+        show3dBuildings={show3dBuildings}
         drawMode={activeView === "simulation" && simulationDrawMode}
         pickPointMode={activeView === "simulation" && customPointMode}
         coverageCircles={coverageCircles}
@@ -579,16 +641,19 @@ export default function DashboardPage() {
         maxVisibleReports={maxVisibleReports}
         autoPan={autoPan}
         showHeatmap={showHeatmap}
+        show3dBuildings={show3dBuildings}
         simulationIntervalMs={simulationIntervalMs}
         droneSpeedMs={droneSpeedMs}
         onAutoPanChange={setAutoPan}
         onShowHeatmapChange={setShowHeatmap}
+        onShow3dBuildingsChange={setShow3dBuildings}
         onSimulationIntervalChange={(next) => setSimulationIntervalMs(Math.max(500, Math.min(10000, Number.isFinite(next) ? next : 2200)))}
         onDroneSpeedChange={(next) => setDroneSpeedMs(Math.max(0.5, Math.min(50, Number.isFinite(next) ? next : DEFAULT_DRONE_SPEED_MS)))}
         onMaxVisibleReportsChange={(next) => setMaxVisibleReports(Math.max(20, Math.min(300, Number.isFinite(next) ? next : 120)))}
         onResetSettings={() => {
           setAutoPan(true)
           setShowHeatmap(false)
+          setShow3dBuildings(true)
           setSimulationIntervalMs(2200)
           setMaxVisibleReports(120)
           setDroneSpeedMs(DEFAULT_DRONE_SPEED_MS)
@@ -642,6 +707,11 @@ export default function DashboardPage() {
           if (file) base64CacheRef.current.clear()
         }}
         onSendTestImage={sendTestImage}
+        useGemini={useGemini}
+        geminiAvailable={geminiAvailable}
+        activeModelName={activeModelName}
+        settingsLoading={settingsLoading}
+        onUseGeminiChange={handleUseGeminiChange}
       />
 
       {/* Layer 2: Bottom dock */}

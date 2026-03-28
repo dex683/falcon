@@ -48,6 +48,7 @@ interface LiveMapProps {
   latestFrame: DroneFrame | null
   autoPan: boolean
   showHeatmap: boolean
+  show3dBuildings: boolean
   drawMode: boolean
   pickPointMode: boolean
   coverageCircles: CoverageCircle[]
@@ -69,6 +70,7 @@ export function LiveMap({
   latestFrame,
   autoPan,
   showHeatmap,
+  show3dBuildings,
   drawMode,
   pickPointMode,
   coverageCircles,
@@ -249,33 +251,47 @@ export function LiveMap({
 
   const handleMapLoad = useCallback((e: MapLibreEvent) => {
     setMapLoaded(true)
-    const map = e.target
-
-    // 3D buildings
-    const labelLayerId = map
-      .getStyle()
-      .layers.find((l) => l.type === "symbol" && (l.layout as Record<string, unknown>)?.["text-field"])?.id
-
-    if (map.getSource("openmaptiles") || map.getSource("maptiler_planet")) {
-      const sourceId = map.getSource("openmaptiles") ? "openmaptiles" : "maptiler_planet"
-      map.addLayer(
-        {
-          id: "3d-buildings",
-          source: sourceId,
-          "source-layer": "building",
-          type: "fill-extrusion",
-          minzoom: 14,
-          paint: {
-            "fill-extrusion-color": "#1a1a2e",
-            "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"], 14, 0, 14.5, ["get", "render_height"]],
-            "fill-extrusion-base": ["interpolate", ["linear"], ["zoom"], 14, 0, 14.5, ["get", "render_min_height"]],
-            "fill-extrusion-opacity": 0.7,
-          },
-        },
-        labelLayerId
-      )
-    }
   }, [])
+
+  // 3D Buildings Layer Toggle
+  useEffect(() => {
+    if (!mapLoaded || !mapRef.current) return
+    const map = mapRef.current.getMap()
+    const layerId = "3d-buildings"
+
+    if (show3dBuildings) {
+      if (!map.getLayer(layerId)) {
+        const labelLayerId = map
+          .getStyle()
+          .layers.find((l) => l.type === "symbol" && (l.layout as Record<string, unknown>)?.["text-field"])?.id
+
+        if (map.getSource("openmaptiles") || map.getSource("maptiler_planet")) {
+          const sourceId = map.getSource("openmaptiles") ? "openmaptiles" : "maptiler_planet"
+          map.addLayer(
+            {
+              id: layerId,
+              source: sourceId,
+              "source-layer": "building",
+              type: "fill-extrusion",
+              minzoom: 14,
+              paint: {
+                "fill-extrusion-color": "#1a1a2e",
+                "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"], 14, 0, 14.5, ["get", "render_height"]],
+                "fill-extrusion-base": ["interpolate", ["linear"], ["zoom"], 14, 0, 14.5, ["get", "render_min_height"]],
+                "fill-extrusion-opacity": 0.7,
+              },
+            },
+            labelLayerId
+          )
+        }
+      }
+    } else {
+      if (map.getLayer(layerId)) {
+        map.removeLayer(layerId)
+      }
+    }
+  }, [show3dBuildings, mapLoaded])
+
 
   const handleMapClick = useCallback((event: { lngLat: { lat: number; lng: number } }) => {
     if (pickPointMode) {
