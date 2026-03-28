@@ -66,6 +66,21 @@ drone_sim = DroneSimulator(socketio, detector=detector)
 # ─── Connection Tracking ─────────────────────────────────────────────
 connected_clients = {}
 
+# ─── Shared Simulation State ─────────────────────────────────────────
+# This is the single source of truth replayed to every connecting client
+# and broadcast to all clients whenever anything changes.
+shared_state = {
+    "deployed_drones": [],   # list of DeployedDrone-like dicts
+    "coverage_zones": [],    # list of CoverageCircle-like dicts
+    "simulation_running": False,
+    "frames": [],            # last 200 ML-processed frames
+}
+
+
+def broadcast_state():
+    """Broadcast the full shared state to all connected clients."""
+    socketio.emit("state_sync", shared_state)
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # REST Endpoints
@@ -161,6 +176,8 @@ def handle_connect():
         "server_time": time.time(),
         "message": "Connected to Skeem Damage Mapping Server",
     })
+    # Replay full shared state to the newly connected client only
+    emit("state_sync", shared_state)
 
 
 @socketio.on("disconnect")
@@ -213,6 +230,15 @@ def handle_drone_frame(data):
             "timestamp": time.time(),
         }
 
+        # Store frame in shared state for replay to new clients (keep last 200)
+        frame_summary = {
+            "frame_id": result["frame_id"],
+            "summary": result["summary"],
+            "drone_metadata": metadata,
+            "timestamp": payload["timestamp"],
+        }
+        shared_state["frames"] = ([frame_summary] + shared_state["frames"])[:200]
+
         # Broadcast to ALL connected clients (including sender)
         socketio.emit("processed_frame", payload)
 
@@ -225,6 +251,85 @@ def handle_drone_frame(data):
     except Exception as e:
         print(f"[Server] Error processing frame: {e}")
         emit("error", {"message": f"Processing error: {str(e)}"})
+
+
+# ─── Multi-Client Shared State Events ──────────────────────────────
+
+@socketio.on("client_deploy_drones")
+def handle_client_deploy_drones(data):
+    """
+    A frontend client deployed new drones into a coverage zone.
+    Store in shared state and broadcast to all clients.
+    """
+    drones = data.get("drones", [])
+    zone = data.get("zone")
+    if zone:
+        shared_state["coverage_zones"] = ([zone] + shared_state["coverage_zones"])[:80]
+    shared_state["deployed_drones"] = drones + [
+        d for d in shared_state["deployed_drones"]
+        if d.get("id") not in {dr.get("id") for dr in drones}
+    ]
+    print(f"[State] deploy_drones: {len(drones)} drone(s), zone={zone.get('id') if zone else None}")
+    broadcast_state()
+
+
+@socketio.on("client_update_drones")
+def handle_client_update_drones(data):
+    """
+    A frontend client emits updated drone positions (per simulation tick).
+    Replace matching drones in shared state and broadcast.
+    """
+    updated = data.get("drones", [])
+    if not updated:
+        return
+    updated_ids = {d.get("id") for d in updated}
+    # Keep drones not in this update (they may be in another zone), replace the rest
+    kept = [d for d in shared_state["deployed_drones"] if d.get("id") not in updated_ids]
+    shared_state["deployed_drones"] = updated + kept
+    broadcast_state()
+
+
+@socketio.on("client_remove_drones")
+def handle_client_remove_drones(data):
+    """Remove completed drones from shared state."""
+    remove_ids = set(data.get("ids", []))
+    if not remove_ids:
+        return
+    shared_state["deployed_drones"] = [
+        d for d in shared_state["deployed_drones"] if d.get("id") not in remove_ids
+    ]
+    broadcast_state()
+
+
+@socketio.on("client_simulation_control")
+def handle_client_simulation_control(data):
+    """A client started or stopped the simulation."""
+    running = bool(data.get("running", False))
+    shared_state["simulation_running"] = running
+    print(f"[State] simulation_running → {running}")
+    broadcast_state()
+
+
+@socketio.on("client_clear_simulation")
+def handle_client_clear_simulation(data=None):
+    """A client reset the entire simulation."""
+    shared_state["deployed_drones"] = []
+    shared_state["coverage_zones"] = []
+    shared_state["simulation_running"] = False
+    shared_state["frames"] = []
+    print("[State] Simulation cleared by client")
+    broadcast_state()
+
+
+@socketio.on("client_add_zone")
+def handle_client_add_zone(data):
+    """A client added a new coverage zone."""
+    zone = data.get("zone")
+    if not zone:
+        return
+    shared_state["coverage_zones"] = ([zone] + shared_state["coverage_zones"])[:80]
+    print(f"[State] add_zone: {zone.get('id')}")
+    broadcast_state()
 
 
 # ─── Simulation Controls ─────────────────────────────────────────────

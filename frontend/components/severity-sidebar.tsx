@@ -71,6 +71,7 @@ interface SeveritySidebarProps {
   onClearCustomTestPoint: () => void
   customImageSelected: boolean
   onSelectCustomImage: (file: File | null) => void
+  onSendTestImage: () => void
 }
 
 export function SeveritySidebar({
@@ -118,6 +119,7 @@ export function SeveritySidebar({
   onClearCustomTestPoint,
   customImageSelected,
   onSelectCustomImage,
+  onSendTestImage,
 }: SeveritySidebarProps) {
   const sorted = [...frames].sort((a, b) => b.severity - a.severity)
   const visibleFrames = sorted.slice(0, maxVisibleReports)
@@ -203,7 +205,7 @@ export function SeveritySidebar({
               <div className="rounded-full bg-background/40 p-4">
                 <AlertTriangle className="h-6 w-6 text-muted-foreground" />
               </div>
-              <p className="text-sm text-muted-foreground"> No incoming reports.</p>
+              <p className="text-sm text-muted-foreground">No incoming reports.</p>
             </div>
           ) : null}
 
@@ -269,7 +271,7 @@ export function SeveritySidebar({
                 <Input
                   id="sim-interval"
                   type="number"
-                  min={500}
+                  min={300}
                   max={10000}
                   step={100}
                   value={simulationIntervalMs}
@@ -283,7 +285,7 @@ export function SeveritySidebar({
                   id="drone-speed"
                   type="number"
                   min={0.5}
-                  max={25}
+                  max={50}
                   step={0.5}
                   value={droneSpeedMs}
                   onChange={(e) => onDroneSpeedChange(Number(e.target.value))}
@@ -296,7 +298,7 @@ export function SeveritySidebar({
                   id="spiral-gap"
                   type="number"
                   min={10}
-                  max={200}
+                  max={500}
                   step={5}
                   value={spiralSpacingMeters}
                   onChange={(e) => onSpiralSpacingChange(Number(e.target.value))}
@@ -309,7 +311,7 @@ export function SeveritySidebar({
                   id="altitude"
                   type="number"
                   min={10}
-                  max={1000}
+                  max={3000}
                   step={10}
                   value={droneAltitudeM}
                   onChange={(e) => onDroneAltitudeChange(Number(e.target.value))}
@@ -471,6 +473,16 @@ export function SeveritySidebar({
                   />
                   <p className="text-[11px] text-[oklch(0.55_0_0)]">Selected: {customImageSelected ? "Yes" : "No"}</p>
                 </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={!customImageSelected}
+                  onClick={onSendTestImage}
+                >
+                  Send test image
+                </Button>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
