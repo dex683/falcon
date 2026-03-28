@@ -102,6 +102,22 @@ export default function DashboardPage() {
   const [amISimulating, setAmISimulating] = useState(false)
 
   const [folderImages, setFolderImages] = useState<File[]>([])
+  const [currentFolderImageBase64, setCurrentFolderImageBase64] = useState<string | null>(null)
+  
+  const [videoFile, setVideoFile] = useState<File | null>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const [videoObjectUrl, setVideoObjectUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (videoFile) {
+      const url = URL.createObjectURL(videoFile)
+      setVideoObjectUrl(url)
+      return () => URL.revokeObjectURL(url)
+    } else {
+      setVideoObjectUrl(null)
+    }
+  }, [videoFile])
+
   const [customPointMode, setCustomPointMode] = useState(false)
   const [customTestPoint, setCustomTestPoint] = useState<{ lat: number; lng: number; zoneId?: string } | null>(null)
   const [customImageFile, setCustomImageFile] = useState<File | null>(null)
@@ -195,6 +211,7 @@ export default function DashboardPage() {
       lng: number
       zoneId: string
       imageFile: File | null
+      videoFrameBase64: string | null
       isCustomPoint: boolean
       cellKey: string
     }
@@ -218,6 +235,20 @@ export default function DashboardPage() {
 
       let isCustomPoint = false
       let imageFile: File | null = pickRandomFolderImage()
+      let videoFrameBase64: string | null = null
+
+      if (videoRef.current && videoRef.current.readyState >= 2) {
+        const video = videoRef.current
+        const canvas = document.createElement("canvas")
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        const ctx = canvas.getContext("2d")
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.7)
+          videoFrameBase64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl
+        }
+      }
 
       if (customTestPoint && !customPointTriggeredRef.current) {
         const zoneMatch = !customTestPoint.zoneId || customTestPoint.zoneId === drone.zoneId
@@ -245,6 +276,7 @@ export default function DashboardPage() {
         lng: drone.lng,
         zoneId: drone.zoneId,
         imageFile,
+        videoFrameBase64,
         isCustomPoint,
         cellKey,
       })
@@ -258,14 +290,19 @@ export default function DashboardPage() {
 
       for (let i = 0; i < candidates.length; i++) {
         const candidate = candidates[i]
-        const imageId = candidate.imageFile
+        const imageId = candidate.videoFrameBase64
+          ? `vid-${now}-${i}`
+          : candidate.imageFile
           ? `${candidate.imageFile.name}-${candidate.imageFile.size}-${candidate.imageFile.lastModified}`
           : `placeholder-${now}-${i}`
 
         let imageBase64 = PLACEHOLDER_FRAME_IMAGE_BASE64
-        if (candidate.imageFile) {
+        if (candidate.videoFrameBase64) {
+          imageBase64 = candidate.videoFrameBase64
+        } else if (candidate.imageFile) {
           try {
             imageBase64 = await fileToBase64Raw(candidate.imageFile)
+            setCurrentFolderImageBase64(imageBase64)
           } catch {
             imageBase64 = PLACEHOLDER_FRAME_IMAGE_BASE64
           }
@@ -298,12 +335,13 @@ export default function DashboardPage() {
         payloadBatch.push(payload)
 
         generatedFrames.push({
-          frame_id: `SIM-${String(frameCounterRef.current++).padStart(4, "0")}`,
+          frame_id: payload.imageId,
           lat: payload.lat,
           lng: payload.lng,
           severity: 0,
-          label: candidate.isCustomPoint ? "custom_test" : SIMULATION_LABELS[Math.floor(Math.random() * SIMULATION_LABELS.length)],
+          label: candidate.isCustomPoint ? "custom_test" : "processing",
           receivedAt: now,
+          status: "processing"
         })
       }
 
@@ -700,8 +738,11 @@ export default function DashboardPage() {
           const files = fileList ? Array.from(fileList) : []
           const images = files.filter((f) => f.type.startsWith("image/"))
           setFolderImages(images)
+          setCurrentFolderImageBase64(null)
           base64CacheRef.current.clear()
         }}
+        videoFile={videoFile}
+        onSelectVideo={setVideoFile}
         customPointMode={customPointMode}
         onToggleCustomPointMode={() => {
           setCustomPointMode((prev) => !prev)
@@ -727,6 +768,39 @@ export default function DashboardPage() {
 
       {/* Layer 2: Bottom dock */}
       <BottomDock activeView={activeView} onSelect={setActiveView} />
+
+      {/* Floating Video Player */}
+      {videoObjectUrl && simulationRunning && (
+        <div className="pointer-events-none absolute bottom-6 right-6 z-50 overflow-hidden rounded-xl border border-[oklch(0.24_0.005_240/60%)] bg-[oklch(0.12_0_0/80%)] shadow-2xl backdrop-blur-sm transition-all duration-300">
+          <div className="bg-[oklch(0.18_0_0/50%)] px-3 py-1.5 text-xs font-medium text-[oklch(0.85_0_0)]">
+            Live Feed:
+          </div>
+          <video
+            ref={videoRef}
+            src={videoObjectUrl}
+            className="w-80 object-cover"
+            autoPlay
+            muted
+            loop
+            playsInline
+          />
+        </div>
+      )}
+
+      {/* Floating Folder Image Player */}
+      {!videoObjectUrl && currentFolderImageBase64 && simulationRunning && (
+        <div className="pointer-events-none absolute bottom-6 right-6 z-50 overflow-hidden rounded-xl border border-[oklch(0.24_0.005_240/60%)] bg-[oklch(0.12_0_0/80%)] shadow-2xl backdrop-blur-sm transition-all duration-300">
+          <div className="bg-[oklch(0.18_0_0/50%)] px-3 py-1.5 text-xs font-medium text-[oklch(0.85_0_0)]">
+            Live Feed: Folder Scan
+          </div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={currentFolderImageBase64.startsWith("data:") ? currentFolderImageBase64 : `data:image/jpeg;base64,${currentFolderImageBase64}`}
+            alt="Current Drone View"
+            className="w-80 object-cover"
+          />
+        </div>
+      )}
     </main>
   )
 }

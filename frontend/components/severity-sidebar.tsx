@@ -71,6 +71,9 @@ interface SeveritySidebarProps {
   folderImageCount: number
   onSelectImageFolder: (files: FileList | null) => void
 
+  videoFile: File | null
+  onSelectVideo: (file: File | null) => void
+
   customPointMode: boolean
   onToggleCustomPointMode: () => void
   customTestPoint: { lat: number; lng: number; zoneId?: string } | null

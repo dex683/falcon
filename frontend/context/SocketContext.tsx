@@ -10,6 +10,8 @@ export interface DroneFrame {
   severity: number
   label: string
   receivedAt: number
+  status?: "processing" | "done"
+  image_b64?: string
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error" | "demo"
@@ -111,6 +113,7 @@ function normalizeTimestampMs(timestamp: unknown): number {
 
 type ProcessedFramePayload = {
   frame_id: string
+  image?: string
   timestamp: number
   summary?: {
     status?: string
@@ -218,6 +221,8 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       severity,
       label: typeof label === "string" && label.length > 0 ? label : "unknown",
       receivedAt,
+      image_b64: typeof payload.image === "string" ? payload.image : undefined,
+      status: "done",
     }
 
     setLatestFrame(frame)

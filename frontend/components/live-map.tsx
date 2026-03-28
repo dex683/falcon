@@ -481,6 +481,7 @@ export function LiveMap({
         ) : null}
 
         {uniqueFrames.map((frame) => {
+          const isProcessing = frame.status === "processing"
           const isGood = isGoodFrame(frame)
           const level = getSeverityLevel(frame.severity)
           const config = SEVERITY_CONFIG[level]
@@ -500,24 +501,33 @@ export function LiveMap({
             >
               <button
                 className="group relative cursor-pointer focus:outline-none"
-                aria-label={`${frame.label} severity ${frame.severity}`}
+                aria-label={isProcessing ? "Processing..." : `${frame.label} severity ${frame.severity}`}
                 data-severity-marker="true"
               >
-                {/* Outer ring for severe markers */}
-                {isSevere && !isGood && (
-                  <span
-                    className="absolute inset-0 -m-1.5 rounded-full opacity-40 severity-pulse"
-                    style={{ backgroundColor: config.color, filter: "blur(4px)" }}
-                  />
+                {isProcessing ? (
+                  <span className="relative flex h-4 w-4 items-center justify-center">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[oklch(0.6_0_0)] opacity-40"></span>
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-[oklch(0.5_0_0)]"></span>
+                  </span>
+                ) : (
+                  <>
+                    {/* Outer ring for severe markers */}
+                    {isSevere && !isGood && (
+                      <span
+                        className="absolute inset-0 -m-1.5 rounded-full opacity-40 severity-pulse"
+                        style={{ backgroundColor: config.color, filter: "blur(4px)" }}
+                      />
+                    )}
+                    <span
+                      className={
+                        isGood
+                          ? "relative block h-3 w-3 rounded-full border border-[oklch(0.98_0_0/85%)] bg-[#3b82f6] opacity-95 shadow-[0_0_0_1px_oklch(0.1_0_0/20%)]"
+                          : `relative block h-4 w-4 rounded-full border-2 border-[oklch(0.10_0_0/50%)] marker-fade-in shadow-lg transition-transform duration-150 group-hover:scale-125 ${isLatest && isSevere ? "severity-pulse" : ""}`
+                      }
+                      style={isGood ? undefined : { backgroundColor: config.color }}
+                    />
+                  </>
                 )}
-                <span
-                  className={
-                    isGood
-                      ? "relative block h-2 w-2 rounded-full border border-[oklch(0.98_0_0/85%)] bg-[oklch(0.72_0.19_142)] opacity-95 shadow-[0_0_0_1px_oklch(0.1_0_0/20%)]"
-                      : `relative block h-4 w-4 rounded-full border-2 border-[oklch(0.10_0_0/50%)] marker-fade-in shadow-lg transition-transform duration-150 group-hover:scale-125 ${isLatest && isSevere ? "severity-pulse" : ""}`
-                  }
-                  style={isGood ? undefined : { backgroundColor: config.color }}
-                />
               </button>
             </Marker>
           )
@@ -537,6 +547,14 @@ export function LiveMap({
                 <span className="text-[11px] font-mono text-[oklch(0.45_0_0)]">#{popupInfo.frame.frame_id}</span>
                 <SeverityBadge score={popupInfo.frame.severity} />
               </div>
+              
+              {popupInfo.frame.image_b64 ? (
+                <div className="mb-2 w-full overflow-hidden rounded bg-[oklch(0_0_0)]">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={`data:image/jpeg;base64,${popupInfo.frame.image_b64}`} alt="Processed Frame" className="h-auto w-full object-contain" />
+                </div>
+              ) : null}
+
               <p className="mb-2 text-sm font-medium capitalize text-[oklch(0.96_0_0)]">
                 {popupInfo.frame.label.replace(/_/g, " ")}
               </p>

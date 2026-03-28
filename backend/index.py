@@ -25,6 +25,8 @@ except ImportError:
 
 from ml_processor import DamageDetector
 from drone_simulator import DroneSimulator
+from queue_db import init_db, enqueue_frame, get_next_job, mark_job_completed
+import json
 
 # ─── App Setup ───────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -287,43 +289,66 @@ def handle_drone_frame(data):
         emit("error", {"message": "No image data received"})
         return
 
+    frame_id = metadata.get("image_id", f"frame_{int(time.time()*1000)}")
+    
     try:
-        # Run ML damage detection
-        result = detector.process_frame(image_b64)
-
-        # Build the processed frame payload
-        payload = {
-            "image": result["image"],
-            "detections": result["detections"],
-            "processing_time_ms": result["processing_time_ms"],
-            "frame_id": result["frame_id"],
-            "total_damage_count": result["total_damage_count"],
-            "summary": result["summary"],
-            "drone_metadata": metadata,
-            "timestamp": time.time(),
-        }
-
-        # Store frame in shared state for replay to new clients (keep last 200)
-        frame_summary = {
-            "frame_id": result["frame_id"],
-            "summary": result["summary"],
-            "drone_metadata": metadata,
-            "timestamp": payload["timestamp"],
-        }
-        shared_state["frames"] = ([frame_summary] + shared_state["frames"])[:200]
-
-        # Broadcast to ALL connected clients (including sender)
-        socketio.emit("processed_frame", payload)
-
-        # Log
-        det_count = result["total_damage_count"]
-        proc_time = result["processing_time_ms"]
-        print(f"[ML] {result['frame_id']} processed: "
-              f"{det_count} detections in {proc_time}ms")
-
+        enqueue_frame(frame_id, image_b64, metadata)
+        print(f"[Queue] Frame {frame_id} queued for processing")
     except Exception as e:
-        print(f"[Server] Error processing frame: {e}")
-        emit("error", {"message": f"Processing error: {str(e)}"})
+        print(f"[Server] Error queuing frame: {e}")
+        emit("error", {"message": f"Queuing error: {str(e)}"})
+
+
+# ─── Background ML Worker ──────────────────────────────────────────
+
+def ml_worker_loop():
+    """Background daemon to poll the SQLite database for pending ML jobs."""
+    print("[Worker] Started background ML polling thread")
+    while True:
+        try:
+            job = get_next_job()
+            if not job:
+                socketio.sleep(0.5)
+                continue
+                
+            frame_id = job["frame_id"]
+            image_b64 = job["image_b64"]
+            try:
+                metadata = json.loads(job["metadata"])
+            except Exception:
+                metadata = {}
+
+            # Run ML damage detection
+            result = detector.process_frame(image_b64)
+
+            payload = {
+                "image": result["image"],
+                "detections": result["detections"],
+                "processing_time_ms": result["processing_time_ms"],
+                "frame_id": frame_id,
+                "total_damage_count": result["total_damage_count"],
+                "summary": result["summary"],
+                "drone_metadata": metadata,
+                "timestamp": time.time(),
+            }
+
+            frame_summary = {
+                "frame_id": frame_id,
+                "summary": result["summary"],
+                "drone_metadata": metadata,
+                "timestamp": payload["timestamp"],
+            }
+            shared_state["frames"] = ([frame_summary] + shared_state["frames"])[:200]
+
+            socketio.emit("processed_frame", payload)
+            mark_job_completed(job["id"])
+
+            print(f"[ML] {frame_id} processed: {result['total_damage_count']} detections in {result['processing_time_ms']}ms")
+            socketio.sleep(0.01)
+            
+        except Exception as e:
+            print(f"[Worker] Error processing job: {e}")
+            socketio.sleep(1)
 
 
 # ─── Multi-Client Shared State Events ──────────────────────────────
@@ -439,12 +464,23 @@ def handle_get_simulation_status(data=None):
 # ═══════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    init_db()
+    
     print("=" * 60)
     print("  🛸 Skeem - Drone Damage Mapping Server")
     print("  📡 WebSocket: ws://localhost:5001")
+
     print("  🌐 REST API: http://localhost:5001/api/status")
     print("=" * 60)
 
+    try:
+        import torch
+        print(f"[System] GPU Support: {torch.cuda.is_available()}")
+    except ImportError:
+        print("[System] PyTorch not installed")
+
+    socketio.start_background_task(ml_worker_loop)
+    
     socketio.run(
         app,
         host="0.0.0.0",
