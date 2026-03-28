@@ -1,5 +1,5 @@
 """
-Skeem — Autonomous Drone Damage Mapping Server
+Skeem - Autonomous Drone Damage Mapping Server
 ================================================
 Flask-SocketIO server that receives drone images in real-time,
 processes them through an ML damage detection pipeline, and
@@ -232,7 +232,7 @@ def handle_get_simulation_status(data=None):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("  🛸 Skeem — Drone Damage Mapping Server")
+    print("  🛸 Skeem - Drone Damage Mapping Server")
     print("  📡 WebSocket: ws://localhost:5001")
     print("  🌐 REST API: http://localhost:5001/api/status")
     print("=" * 60)

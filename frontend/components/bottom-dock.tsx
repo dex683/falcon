@@ -1,8 +1,7 @@
 "use client"
 
 import { useRef } from "react"
-import { usePathname } from "next/navigation"
-import { Home, Map, Bell, User } from "lucide-react"
+import { Map, Settings2, Plane } from "lucide-react"
 import {
   motion,
   useMotionValue,
@@ -15,22 +14,23 @@ import { cn } from "@/lib/utils"
 /* ─── config ─────────────────────────────────────────────────────────── */
 
 const BASE_SIZE = 48
-const MAX_SIZE  = 80
+const MAX_SIZE  = 64
 const RANGE     = 140           // px influence radius on either side
 
 const SPRING_CFG = { mass: 1, stiffness: 800, damping: 100 }
 
+export type DashboardView = "map" | "settings" | "simulation"
+
 interface NavItem {
   icon: React.ElementType
   label: string
-  href: string
+  view: DashboardView
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { icon: Home, label: "Home",      href: "/" },
-  { icon: Map,  label: "Dashboard", href: "/dashboard" },
-  { icon: Bell, label: "Alerts",    href: "/alerts" },
-  { icon: User, label: "Profile",   href: "/profile" },
+  { icon: Map, label: "Main Map", view: "map" },
+  { icon: Settings2, label: "Settings", view: "settings" },
+  { icon: Plane, label: "Simulation", view: "simulation" },
 ]
 
 /* ─── single icon ────────────────────────────────────────────────────── */
@@ -39,12 +39,14 @@ function DockIcon({
   item,
   mouseX,
   isActive,
+  onSelect,
 }: {
   item: NavItem
   mouseX: MotionValue<number>
   isActive: boolean
+  onSelect: (view: DashboardView) => void
 }) {
-  const ref = useRef<HTMLAnchorElement>(null)
+  const ref = useRef<HTMLButtonElement>(null)
 
   // distance from cursor centre to this icon's centre
   const distance = useTransform(mouseX, (mx) => {
@@ -59,7 +61,7 @@ function DockIcon({
   const size    = useSpring(sizePx, SPRING_CFG)
 
   // lift icon upward as it grows
-  const liftPx  = useTransform(size, [BASE_SIZE, MAX_SIZE], [0, -10])
+  const liftPx  = useTransform(size, [BASE_SIZE, MAX_SIZE], [0, -6])
   const lift    = useSpring(liftPx, SPRING_CFG)
 
   // icon scale relative to container
@@ -69,19 +71,20 @@ function DockIcon({
   const Icon = item.icon
 
   return (
-    <motion.a
+    <motion.button
+      type="button"
       ref={ref}
-      href={item.href}
+      onClick={() => onSelect(item.view)}
       style={{ width: size, height: size, y: lift }}
       className={cn(
-        "group relative flex flex-shrink-0 items-center justify-center rounded-xl",
+        "group relative flex shrink-0 items-center justify-center rounded-xl",
         "transition-[background-color,box-shadow] duration-150",
         isActive
           ? "bg-[oklch(0.65_0.18_220/18%)] shadow-[0_0_0_1px_oklch(0.65_0.18_220/28%)]"
           : "hover:bg-[oklch(1_0_0/6%)]",
       )}
       aria-label={item.label}
-      aria-current={isActive ? "page" : undefined}
+      aria-current={isActive ? "true" : undefined}
     >
       {/* icon — separately scaled so stroke-width stays sharp */}
       <motion.div
@@ -119,14 +122,19 @@ function DockIcon({
       >
         {item.label}
       </span>
-    </motion.a>
+    </motion.button>
   )
 }
 
 /* ─── dock shell ─────────────────────────────────────────────────────── */
 
-export function BottomDock() {
-  const pathname = usePathname()
+export function BottomDock({
+  activeView,
+  onSelect,
+}: {
+  activeView: DashboardView
+  onSelect: (view: DashboardView) => void
+}) {
   const mouseX  = useMotionValue(Infinity)   // Infinity = "no cursor"
 
   return (
@@ -145,14 +153,11 @@ export function BottomDock() {
       >
         {NAV_ITEMS.map((item) => (
           <DockIcon
-            key={item.href}
+            key={item.view}
             item={item}
             mouseX={mouseX}
-            isActive={
-              item.href === "/dashboard"
-                ? pathname.startsWith("/dashboard")
-                : pathname === item.href
-            }
+            isActive={item.view === activeView}
+            onSelect={onSelect}
           />
         ))}
       </motion.div>
