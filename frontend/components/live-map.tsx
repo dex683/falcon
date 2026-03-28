@@ -26,17 +26,38 @@ import "maplibre-gl/dist/maplibre-gl.css"
 
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/bright"
 
+function isGoodFrame(frame: DroneFrame) {
+  const normalizedLabel = (frame.label ?? "").trim().toLowerCase()
+  return normalizedLabel === "good" || normalizedLabel === "no_damage" || frame.severity <= 1.2
+}
+
+function formatDistance(meters: number) {
+  if (!Number.isFinite(meters) || meters < 0) return "0 m"
+  if (meters >= 1000) return `${(meters / 1000).toFixed(2)} km`
+  return `${Math.round(meters)} m`
+}
+
+function formatArea(areaSquareMeters: number) {
+  if (!Number.isFinite(areaSquareMeters) || areaSquareMeters < 0) return "0 m²"
+  if (areaSquareMeters >= 1_000_000) return `${(areaSquareMeters / 1_000_000).toFixed(2)} km²`
+  return `${Math.round(areaSquareMeters)} m²`
+}
+
 interface LiveMapProps {
   frames: DroneFrame[]
   latestFrame: DroneFrame | null
   autoPan: boolean
   showHeatmap: boolean
   drawMode: boolean
+  pickPointMode: boolean
   coverageCircles: CoverageCircle[]
   deployedDrones: DeployedDrone[]
   circleDraft: CircleDraft | null
+  customTestPoint: { lat: number; lng: number } | null
   onCircleDraftChange: (draft: CircleDraft | null) => void
   onCircleDrawComplete: (draft: CircleDraft) => void
+  onPickPoint: (pt: { lat: number; lng: number }) => void
+  onCancelDrawMode: () => void
 }
 
 interface PopupInfo {
@@ -49,16 +70,94 @@ export function LiveMap({
   autoPan,
   showHeatmap,
   drawMode,
+  pickPointMode,
   coverageCircles,
   deployedDrones,
   circleDraft,
+  customTestPoint,
   onCircleDraftChange,
   onCircleDrawComplete,
+  onPickPoint,
+  onCancelDrawMode,
 }: LiveMapProps) {
   const mapRef = useRef<MapRef>(null)
   const [popupInfo, setPopupInfo] = useState<PopupInfo | null>(null)
   const [mapLoaded, setMapLoaded] = useState(false)
   const [drawStart, setDrawStart] = useState<{ lat: number; lng: number } | null>(null)
+  const [drawHover, setDrawHover] = useState<{ lat: number; lng: number; radiusMeters: number } | null>(null)
+  const [animatedDronePositions, setAnimatedDronePositions] = useState<Record<string, { lat: number; lng: number }>>({})
+
+  useEffect(() => {
+    // Seed positions for new drones and remove stale ones.
+    setAnimatedDronePositions((prev) => {
+      const next: Record<string, { lat: number; lng: number }> = {}
+      for (const drone of deployedDrones) {
+        next[drone.id] = prev[drone.id] ?? { lat: drone.lat, lng: drone.lng }
+      }
+      return next
+    })
+  }, [deployedDrones])
+
+  useEffect(() => {
+    if (deployedDrones.length === 0) return
+
+    let rafId = 0
+    let lastTs: number | null = null
+
+    const targetById = new Map(
+      deployedDrones.map((drone) => [drone.id, { lat: drone.lat, lng: drone.lng }])
+    )
+
+    const step = (ts: number) => {
+      const dt = lastTs == null ? 1 / 60 : Math.max(0.001, (ts - lastTs) / 1000)
+      lastTs = ts
+
+      // Exponential smoothing gives fluid movement independent of tick interval.
+      const alpha = 1 - Math.exp(-10 * dt)
+
+      setAnimatedDronePositions((prev) => {
+        const next: Record<string, { lat: number; lng: number }> = {}
+
+        for (const drone of deployedDrones) {
+          const current = prev[drone.id] ?? { lat: drone.lat, lng: drone.lng }
+          const target = targetById.get(drone.id) ?? { lat: drone.lat, lng: drone.lng }
+
+          const latDelta = target.lat - current.lat
+          const lngDelta = target.lng - current.lng
+          const closeEnough = Math.abs(latDelta) < 0.000002 && Math.abs(lngDelta) < 0.000002
+
+          next[drone.id] = closeEnough
+            ? target
+            : {
+                lat: current.lat + latDelta * alpha,
+                lng: current.lng + lngDelta * alpha,
+              }
+        }
+
+        return next
+      })
+
+      rafId = window.requestAnimationFrame(step)
+    }
+
+    rafId = window.requestAnimationFrame(step)
+    return () => window.cancelAnimationFrame(rafId)
+  }, [deployedDrones])
+
+  useEffect(() => {
+    if (!drawMode) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      setDrawStart(null)
+      setDrawHover(null)
+      onCircleDraftChange(null)
+      onCancelDrawMode()
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [drawMode, onCancelDrawMode, onCircleDraftChange])
 
   useEffect(() => {
     if (!popupInfo) return
@@ -108,7 +207,9 @@ export function LiveMap({
   const heatmapGeoJson = useMemo(() => {
     if (!showHeatmap || uniqueFrames.length === 0) return null
 
-    const points = uniqueFrames.slice(0, 500).map((frame) => {
+    const eligible = uniqueFrames.filter((frame) => !isGoodFrame(frame))
+
+    const points = eligible.slice(0, 500).map((frame) => {
       const normalizedSeverity = Number.isFinite(frame.severity)
         ? Math.max(0, Math.min(1, frame.severity / 10))
         : 0
@@ -177,18 +278,24 @@ export function LiveMap({
   }, [])
 
   const handleMapClick = useCallback((event: { lngLat: { lat: number; lng: number } }) => {
+    if (pickPointMode) {
+      onPickPoint({ lat: event.lngLat.lat, lng: event.lngLat.lng })
+      return
+    }
     if (!drawMode) return
     const { lat, lng } = event.lngLat
 
     if (!drawStart) {
       setDrawStart({ lat, lng })
       onCircleDraftChange({ centerLat: lat, centerLng: lng, radiusMeters: 40 })
+      setDrawHover({ lat, lng, radiusMeters: 40 })
       return
     }
 
     const radiusMeters = distanceMeters(drawStart.lat, drawStart.lng, lat, lng)
     if (radiusMeters < 25) {
       setDrawStart(null)
+      setDrawHover(null)
       onCircleDraftChange(null)
       return
     }
@@ -201,12 +308,14 @@ export function LiveMap({
 
     onCircleDrawComplete(draft)
     setDrawStart(null)
-  }, [drawMode, drawStart, onCircleDraftChange, onCircleDrawComplete])
+    setDrawHover(null)
+  }, [drawMode, drawStart, onCircleDraftChange, onCircleDrawComplete, onPickPoint, pickPointMode])
 
   const handleMapMove = useCallback((event: { lngLat: { lat: number; lng: number } }) => {
     if (!drawMode || !drawStart) return
     const { lat, lng } = event.lngLat
     const radiusMeters = distanceMeters(drawStart.lat, drawStart.lng, lat, lng)
+    setDrawHover({ lat, lng, radiusMeters })
     onCircleDraftChange({
       centerLat: drawStart.lat,
       centerLng: drawStart.lng,
@@ -217,6 +326,7 @@ export function LiveMap({
   useEffect(() => {
     if (drawMode) return
     setDrawStart(null)
+    setDrawHover(null)
   }, [drawMode])
 
   return (
@@ -236,7 +346,7 @@ export function LiveMap({
         onClick={handleMapClick}
         onMouseMove={handleMapMove}
         attributionControl={false}
-        cursor={drawMode ? "crosshair" : "grab"}
+        cursor={drawMode || pickPointMode ? "crosshair" : "grab"}
         reuseMaps
       >
         <NavigationControl position="bottom-right" style={{ bottom: "96px", right: "16px" }} />
@@ -311,11 +421,24 @@ export function LiveMap({
           </Source>
         ) : null}
 
-        {deployedDrones.map((drone) => (
+        {drawMode && drawStart && drawHover ? (
+          <Marker longitude={drawHover.lng} latitude={drawHover.lat} anchor="bottom">
+            <div className="-translate-y-2 rounded-full border border-[oklch(0.35_0.01_240/40%)] bg-[oklch(0.13_0.005_240/88%)] px-2.5 py-1 text-[11px] font-mono tabular-nums text-[oklch(0.92_0_0)] shadow-lg backdrop-blur-xl">
+              r={formatDistance(drawHover.radiusMeters)} • A={formatArea(Math.PI * drawHover.radiusMeters * drawHover.radiusMeters)}
+            </div>
+          </Marker>
+        ) : null}
+
+        {deployedDrones.map((drone) => {
+          const animated = animatedDronePositions[drone.id]
+          const lat = animated?.lat ?? drone.lat
+          const lng = animated?.lng ?? drone.lng
+
+          return (
           <Marker
             key={drone.id}
-            longitude={drone.lng}
-            latitude={drone.lat}
+            longitude={lng}
+            latitude={lat}
             anchor="center"
           >
             <div className="relative flex items-center justify-center">
@@ -325,9 +448,20 @@ export function LiveMap({
               </span>
             </div>
           </Marker>
-        ))}
+          )
+        })}
+
+        {customTestPoint ? (
+          <Marker longitude={customTestPoint.lng} latitude={customTestPoint.lat} anchor="center">
+            <div className="relative flex items-center justify-center">
+              <span className="absolute h-8 w-8 rounded-full bg-[oklch(0.62_0.23_25/25%)] blur-[2px]" />
+              <span className="relative block h-3.5 w-3.5 rounded-full border border-[oklch(0.95_0_0/80%)] bg-[oklch(0.62_0.23_25)]" />
+            </div>
+          </Marker>
+        ) : null}
 
         {uniqueFrames.map((frame) => {
+          const isGood = isGoodFrame(frame)
           const level = getSeverityLevel(frame.severity)
           const config = SEVERITY_CONFIG[level]
           const isSevere = level === "severe"
@@ -350,15 +484,19 @@ export function LiveMap({
                 data-severity-marker="true"
               >
                 {/* Outer ring for severe markers */}
-                {isSevere && (
+                {isSevere && !isGood && (
                   <span
                     className="absolute inset-0 -m-1.5 rounded-full opacity-40 severity-pulse"
                     style={{ backgroundColor: config.color, filter: "blur(4px)" }}
                   />
                 )}
                 <span
-                  className={`relative block h-4 w-4 rounded-full border-2 border-[oklch(0.10_0_0/50%)] marker-fade-in shadow-lg transition-transform duration-150 group-hover:scale-125 ${isLatest && isSevere ? "severity-pulse" : ""}`}
-                  style={{ backgroundColor: config.color }}
+                  className={
+                    isGood
+                      ? "relative block h-2 w-2 rounded-full border border-[oklch(0.98_0_0/85%)] bg-[oklch(0.72_0.19_142)] opacity-95 shadow-[0_0_0_1px_oklch(0.1_0_0/20%)]"
+                      : `relative block h-4 w-4 rounded-full border-2 border-[oklch(0.10_0_0/50%)] marker-fade-in shadow-lg transition-transform duration-150 group-hover:scale-125 ${isLatest && isSevere ? "severity-pulse" : ""}`
+                  }
+                  style={isGood ? undefined : { backgroundColor: config.color }}
                 />
               </button>
             </Marker>

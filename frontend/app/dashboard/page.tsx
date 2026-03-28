@@ -8,8 +8,11 @@ import { SeveritySidebar } from "@/components/severity-sidebar"
 import { BottomDock, type DashboardView } from "@/components/bottom-dock"
 import dynamic from "next/dynamic"
 import {
+  areaCellKeyForLatLng,
+  distanceMeters,
+  isInsideCircleMeters,
   pointOffset,
-  randomPointInCircle,
+  stepInwardSpiralConstantSpeed,
   type CircleDraft,
   type CoverageCircle,
   type DeployedDrone,
@@ -26,6 +29,12 @@ const LiveMap = dynamic(() => import("@/components/live-map").then((m) => m.Live
 
 const SIMULATION_LABELS = ["roof_damage", "road_block", "flooding", "debris_field", "fire_damage"]
 
+const DEFAULT_DRONE_SPEED_MS = 6
+const DEFAULT_SPIRAL_SPACING_METERS = 50
+const DEFAULT_DRONE_ALTITUDE_M = 120
+const ALTITUDE_COVERAGE_CELL_FACTOR = 0.6
+const CUSTOM_POINT_TRIGGER_METERS = 12
+
 // 1x1 transparent PNG (raw base64, no data URI prefix) — used as a tiny payload for backend integration.
 const PLACEHOLDER_FRAME_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2yZ6QAAAAASUVORK5CYII="
@@ -38,6 +47,9 @@ export default function DashboardPage() {
   const [showHeatmap, setShowHeatmap] = useState(false)
   const [simulationIntervalMs, setSimulationIntervalMs] = useState(2200)
   const [maxVisibleReports, setMaxVisibleReports] = useState(120)
+  const [droneSpeedMs, setDroneSpeedMs] = useState(DEFAULT_DRONE_SPEED_MS)
+  const [spiralSpacingMeters, setSpiralSpacingMeters] = useState(DEFAULT_SPIRAL_SPACING_METERS)
+  const [droneAltitudeM, setDroneAltitudeM] = useState(DEFAULT_DRONE_ALTITUDE_M)
   const [simulationRunning, setSimulationRunning] = useState(false)
   const [simulatedFrames, setSimulatedFrames] = useState<DroneFrame[]>([])
   const [simulationDrawMode, setSimulationDrawMode] = useState(false)
@@ -47,59 +59,182 @@ export default function DashboardPage() {
   const [dispatchPayloads, setDispatchPayloads] = useState<SimulatorDispatchPayload[]>([])
   const [dronesPerDeployment, setDronesPerDeployment] = useState(1)
 
+  const [folderImages, setFolderImages] = useState<File[]>([])
+  const [customPointMode, setCustomPointMode] = useState(false)
+  const [customTestPoint, setCustomTestPoint] = useState<{ lat: number; lng: number; zoneId?: string } | null>(null)
+  const [customImageFile, setCustomImageFile] = useState<File | null>(null)
+
   const frameCounterRef = useRef(1)
   const zoneCounterRef = useRef(1)
   const droneCounterRef = useRef(1)
   const payloadCounterRef = useRef(1)
 
-  const emitFramesForDrones = useCallback((sourceDrones: DeployedDrone[]) => {
-    if (sourceDrones.length === 0) return
-    const now = Date.now()
-    const generatedFrames: DroneFrame[] = sourceDrones.map((drone) => {
-      const sample = randomPointInCircle(
-        drone.centerLat,
-        drone.centerLng,
-        Math.max(30, drone.radiusMeters * 0.35)
-      )
+  const visitedCellsRef = useRef(new Map<string, Set<string>>())
+  const base64CacheRef = useRef(new Map<string, string>())
+  const customPointTriggeredRef = useRef(false)
 
-      return {
-        frame_id: `SIM-${String(frameCounterRef.current++).padStart(4, "0")}`,
-        lat: sample.lat,
-        lng: sample.lng,
-        // The backend will compute real severity/label; keep this local record minimal.
-        severity: 0,
-        label: SIMULATION_LABELS[Math.floor(Math.random() * SIMULATION_LABELS.length)],
-        receivedAt: now,
+  const fileToBase64Raw = useCallback(async (file: File) => {
+    const cacheKey = `${file.name}:${file.size}:${file.lastModified}`
+    const cached = base64CacheRef.current.get(cacheKey)
+    if (cached) return cached
+
+    const raw = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onerror = () => reject(new Error("Failed to read file"))
+      reader.onload = () => {
+        const result = reader.result
+        if (typeof result !== "string") {
+          reject(new Error("Unexpected FileReader result"))
+          return
+        }
+        const comma = result.indexOf(",")
+        if (comma === -1) {
+          reject(new Error("Invalid data URL"))
+          return
+        }
+        resolve(result.slice(comma + 1))
       }
+      reader.readAsDataURL(file)
     })
 
-    const payloadBatch: SimulatorDispatchPayload[] = sourceDrones.map((drone, index) => ({
-      id: `PAY-${String(payloadCounterRef.current++).padStart(5, "0")}`,
-      droneId: drone.id,
-      zoneId: drone.zoneId,
-      imageId: `IMG-${Date.now()}-${index}`,
-      lat: generatedFrames[index].lat,
-      lng: generatedFrames[index].lng,
-      createdAt: now,
-    }))
+    base64CacheRef.current.set(cacheKey, raw)
+    return raw
+  }, [])
 
-    // Send frames to backend for ML processing. The backend responds via `processed_frame`.
-    for (let i = 0; i < payloadBatch.length; i++) {
-      const payload = payloadBatch[i]
-      sendDroneFrame(PLACEHOLDER_FRAME_IMAGE_BASE64, {
-        lat: payload.lat,
-        lng: payload.lng,
-        source: "frontend_simulator",
-        drone_id: payload.droneId,
-        zone_id: payload.zoneId,
-        image_id: payload.imageId,
+  const pickRandomFolderImage = useCallback(() => {
+    if (folderImages.length === 0) return null
+    return folderImages[Math.floor(Math.random() * folderImages.length)] ?? null
+  }, [folderImages])
+
+  const queueCapturesForDrones = useCallback((sourceDrones: DeployedDrone[], reason: "tick" | "manual" | "deploy") => {
+    if (sourceDrones.length === 0) return
+    const now = Date.now()
+    const speed = Number.isFinite(droneSpeedMs) ? Math.max(0, droneSpeedMs) : DEFAULT_DRONE_SPEED_MS
+    const altitude = Number.isFinite(droneAltitudeM) ? Math.max(10, droneAltitudeM) : DEFAULT_DRONE_ALTITUDE_M
+
+    type Candidate = {
+      drone: DeployedDrone
+      lat: number
+      lng: number
+      zoneId: string
+      imageFile: File | null
+      isCustomPoint: boolean
+      cellKey: string
+    }
+
+    const candidates: Candidate[] = []
+
+    for (const drone of sourceDrones) {
+      if (drone.spiralCompleted) continue
+      if (!isInsideCircleMeters(drone.centerLat, drone.centerLng, drone.radiusMeters, drone.lat, drone.lng)) continue
+
+      const cellSize = Math.max(8, drone.spiralSpacingMeters * 0.8)
+      const altitudeCell = altitude * ALTITUDE_COVERAGE_CELL_FACTOR
+      const effectiveCellSize = Math.max(cellSize, altitudeCell)
+      const cellKey = areaCellKeyForLatLng(drone.centerLat, drone.centerLng, drone.lat, drone.lng, effectiveCellSize)
+      const zoneKey = drone.zoneId
+
+      let zoneSet = visitedCellsRef.current.get(zoneKey)
+      if (!zoneSet) {
+        zoneSet = new Set<string>()
+        visitedCellsRef.current.set(zoneKey, zoneSet)
+      }
+
+      let isCustomPoint = false
+      let imageFile: File | null = pickRandomFolderImage()
+
+      if (customTestPoint && !customPointTriggeredRef.current) {
+        const zoneMatch = !customTestPoint.zoneId || customTestPoint.zoneId === drone.zoneId
+        if (zoneMatch) {
+          const dist = distanceMeters(drone.lat, drone.lng, customTestPoint.lat, customTestPoint.lng)
+          if (dist <= CUSTOM_POINT_TRIGGER_METERS) {
+            isCustomPoint = true
+            customPointTriggeredRef.current = true
+            imageFile = customImageFile ?? imageFile
+          }
+        }
+      }
+
+      // Normal captures are limited to once-per-cell; custom point capture overrides that guard.
+      if (!isCustomPoint) {
+        if (zoneSet.has(cellKey)) continue
+        zoneSet.add(cellKey)
+      } else {
+        zoneSet.add(cellKey)
+      }
+
+      candidates.push({
+        drone,
+        lat: drone.lat,
+        lng: drone.lng,
+        zoneId: drone.zoneId,
+        imageFile,
+        isCustomPoint,
+        cellKey,
       })
     }
 
-    // Keep a local record of dispatched frames for UI counts only.
-    setSimulatedFrames((prev) => [...generatedFrames, ...prev].slice(0, 500))
-    setDispatchPayloads((prev) => [...payloadBatch, ...prev].slice(0, 300))
-  }, [sendDroneFrame])
+    if (candidates.length === 0) return
+
+    void (async () => {
+      const payloadBatch: SimulatorDispatchPayload[] = []
+      const generatedFrames: DroneFrame[] = []
+
+      for (let i = 0; i < candidates.length; i++) {
+        const candidate = candidates[i]
+        const imageId = candidate.imageFile
+          ? `${candidate.imageFile.name}-${candidate.imageFile.size}-${candidate.imageFile.lastModified}`
+          : `placeholder-${now}-${i}`
+
+        let imageBase64 = PLACEHOLDER_FRAME_IMAGE_BASE64
+        if (candidate.imageFile) {
+          try {
+            imageBase64 = await fileToBase64Raw(candidate.imageFile)
+          } catch {
+            imageBase64 = PLACEHOLDER_FRAME_IMAGE_BASE64
+          }
+        }
+
+        const payload: SimulatorDispatchPayload = {
+          id: `PAY-${String(payloadCounterRef.current++).padStart(5, "0")}`,
+          droneId: candidate.drone.id,
+          zoneId: candidate.zoneId,
+          imageId,
+          lat: candidate.lat,
+          lng: candidate.lng,
+          createdAt: now,
+        }
+
+        sendDroneFrame(imageBase64, {
+          lat: payload.lat,
+          lng: payload.lng,
+          source: "frontend_simulator",
+          simulator_reason: reason,
+          drone_speed_ms: speed,
+          altitude_m: altitude,
+          drone_id: payload.droneId,
+          zone_id: payload.zoneId,
+          image_id: payload.imageId,
+          cell_key: candidate.cellKey,
+          custom_point: candidate.isCustomPoint ? true : undefined,
+        })
+
+        payloadBatch.push(payload)
+
+        generatedFrames.push({
+          frame_id: `SIM-${String(frameCounterRef.current++).padStart(4, "0")}`,
+          lat: payload.lat,
+          lng: payload.lng,
+          severity: 0,
+          label: candidate.isCustomPoint ? "custom_test" : SIMULATION_LABELS[Math.floor(Math.random() * SIMULATION_LABELS.length)],
+          receivedAt: now,
+        })
+      }
+
+      setSimulatedFrames((prev) => [...generatedFrames, ...prev].slice(0, 500))
+      setDispatchPayloads((prev) => [...payloadBatch, ...prev].slice(0, 300))
+    })()
+  }, [customImageFile, customTestPoint, droneAltitudeM, droneSpeedMs, fileToBase64Raw, pickRandomFolderImage, sendDroneFrame])
 
   const deployFromDraftCircle = useCallback(() => {
     if (!draftCircle) return
@@ -114,11 +249,11 @@ export default function DashboardPage() {
     }
 
     const count = Math.max(1, Math.min(8, dronesPerDeployment))
+    const outerRadiusMeters = Math.max(15, draftCircle.radiusMeters - 5)
     const freshDrones: DeployedDrone[] = Array.from({ length: count }, (_, index) => {
-      const orbitMeters = Math.max(40, draftCircle.radiusMeters * (0.25 + Math.random() * 0.6))
-      const angleRad = Math.random() * Math.PI * 2
-      const angularVelocity = (0.2 + Math.random() * 0.8) * (Math.random() > 0.5 ? 1 : -1)
-      const position = pointOffset(draftCircle.centerLat, draftCircle.centerLng, orbitMeters, angleRad)
+      const angleOffset = (index / Math.max(1, count)) * Math.PI * 2
+      const direction: 1 | -1 = index % 2 === 0 ? 1 : -1
+      const startPos = pointOffset(draftCircle.centerLat, draftCircle.centerLng, outerRadiusMeters, direction * angleOffset)
 
       return {
         id: `DRONE-${String(droneCounterRef.current++).padStart(3, "0")}`,
@@ -127,26 +262,31 @@ export default function DashboardPage() {
         centerLat: draftCircle.centerLat,
         centerLng: draftCircle.centerLng,
         radiusMeters: draftCircle.radiusMeters,
-        lat: position.lat,
-        lng: position.lng,
-        angleRad,
-        angularVelocity,
-        orbitMeters,
+        lat: startPos.lat,
+        lng: startPos.lng,
+        spiralProgressRad: 0,
+        spiralAngleOffsetRad: angleOffset,
+        spiralDirection: direction,
+        spiralSpacingMeters: Number.isFinite(spiralSpacingMeters)
+          ? Math.max(10, Math.min(200, spiralSpacingMeters))
+          : DEFAULT_SPIRAL_SPACING_METERS,
+        spiralOuterRadiusMeters: outerRadiusMeters,
+        spiralCompleted: false,
         updatedAt: Date.now(),
       }
     })
 
     setCoverageCircles((prev) => [zone, ...prev].slice(0, 80))
     setDeployedDrones((prev) => [ ...freshDrones, ...prev ])
-    emitFramesForDrones(freshDrones)
+    queueCapturesForDrones(freshDrones, "deploy")
     setDraftCircle(null)
     setSimulationDrawMode(false)
-  }, [draftCircle, dronesPerDeployment, emitFramesForDrones])
+  }, [draftCircle, dronesPerDeployment, queueCapturesForDrones, spiralSpacingMeters])
 
   const captureNow = useCallback(() => {
     if (deployedDrones.length === 0) return
-    emitFramesForDrones(deployedDrones)
-  }, [deployedDrones, emitFramesForDrones])
+    queueCapturesForDrones(deployedDrones, "manual")
+  }, [deployedDrones, queueCapturesForDrones])
 
   const clearSimulator = useCallback(() => {
     setSimulationRunning(false)
@@ -156,6 +296,11 @@ export default function DashboardPage() {
     setDeployedDrones([])
     setDraftCircle(null)
     setSimulationDrawMode(false)
+    setCustomPointMode(false)
+    setCustomTestPoint(null)
+    setCustomImageFile(null)
+    customPointTriggeredRef.current = false
+    visitedCellsRef.current.clear()
   }, [])
 
   useEffect(() => {
@@ -169,31 +314,42 @@ export default function DashboardPage() {
       setDeployedDrones((prev) => {
         if (prev.length === 0) return prev
 
+        const speed = Number.isFinite(droneSpeedMs) ? Math.max(0, droneSpeedMs) : DEFAULT_DRONE_SPEED_MS
+
         const moved = prev.map((drone) => {
-          const nextAngle = drone.angleRad + drone.angularVelocity * dt
-          const nextPosition = pointOffset(
-            drone.centerLat,
-            drone.centerLng,
-            drone.orbitMeters,
-            nextAngle
-          )
+          if (drone.spiralCompleted) {
+            return { ...drone, updatedAt: now }
+          }
+
+          const next = stepInwardSpiralConstantSpeed({
+            centerLat: drone.centerLat,
+            centerLng: drone.centerLng,
+            outerRadiusMeters: drone.spiralOuterRadiusMeters,
+            spacingMeters: drone.spiralSpacingMeters,
+            progressRad: drone.spiralProgressRad,
+            angleOffsetRad: drone.spiralAngleOffsetRad,
+            direction: drone.spiralDirection,
+            speedMs: speed,
+            dtSeconds: dt,
+          })
 
           return {
             ...drone,
-            angleRad: nextAngle,
-            lat: nextPosition.lat,
-            lng: nextPosition.lng,
+            spiralProgressRad: next.nextProgressRad,
+            spiralCompleted: next.completed,
+            lat: next.lat,
+            lng: next.lng,
             updatedAt: now,
           }
         })
 
-        emitFramesForDrones(moved)
+        queueCapturesForDrones(moved, "tick")
         return moved
       })
     }, tick)
 
     return () => clearInterval(interval)
-  }, [deployedDrones.length, emitFramesForDrones, simulationIntervalMs, simulationRunning])
+  }, [deployedDrones.length, droneSpeedMs, queueCapturesForDrones, simulationIntervalMs, simulationRunning])
 
   // Only show backend-processed frames on the map/severity list.
   const combinedFrames = useMemo(
@@ -266,11 +422,32 @@ export default function DashboardPage() {
         autoPan={autoPan}
         showHeatmap={showHeatmap}
         drawMode={activeView === "simulation" && simulationDrawMode}
+        pickPointMode={activeView === "simulation" && customPointMode}
         coverageCircles={coverageCircles}
         deployedDrones={deployedDrones}
         circleDraft={draftCircle}
+        customTestPoint={customTestPoint}
         onCircleDraftChange={setDraftCircle}
         onCircleDrawComplete={setDraftCircle}
+        onPickPoint={(pt) => {
+          setCustomTestPoint((prev) => {
+            const next = { lat: pt.lat, lng: pt.lng } as { lat: number; lng: number; zoneId?: string }
+
+            // Attempt to associate with the first zone that contains the point.
+            for (const zone of coverageCircles) {
+              const inside = distanceMeters(zone.centerLat, zone.centerLng, pt.lat, pt.lng) <= zone.radiusMeters
+              if (inside) {
+                next.zoneId = zone.id
+                break
+              }
+            }
+
+            return next
+          })
+          setCustomPointMode(false)
+          customPointTriggeredRef.current = false
+        }}
+        onCancelDrawMode={() => setSimulationDrawMode(false)}
       />
 
       {/* Layer 1: Floating side menu */}
@@ -283,15 +460,20 @@ export default function DashboardPage() {
         autoPan={autoPan}
         showHeatmap={showHeatmap}
         simulationIntervalMs={simulationIntervalMs}
+        droneSpeedMs={droneSpeedMs}
         onAutoPanChange={setAutoPan}
         onShowHeatmapChange={setShowHeatmap}
         onSimulationIntervalChange={(next) => setSimulationIntervalMs(Math.max(500, Math.min(10000, Number.isFinite(next) ? next : 2200)))}
+        onDroneSpeedChange={(next) => setDroneSpeedMs(Math.max(0.5, Math.min(25, Number.isFinite(next) ? next : DEFAULT_DRONE_SPEED_MS)))}
         onMaxVisibleReportsChange={(next) => setMaxVisibleReports(Math.max(20, Math.min(300, Number.isFinite(next) ? next : 120)))}
         onResetSettings={() => {
           setAutoPan(true)
           setShowHeatmap(false)
           setSimulationIntervalMs(2200)
           setMaxVisibleReports(120)
+          setDroneSpeedMs(DEFAULT_DRONE_SPEED_MS)
+          setSpiralSpacingMeters(DEFAULT_SPIRAL_SPACING_METERS)
+          setDroneAltitudeM(DEFAULT_DRONE_ALTITUDE_M)
         }}
         simulationRunning={simulationRunning}
         simulatedCount={simulatedFrames.length}
@@ -300,7 +482,10 @@ export default function DashboardPage() {
         onCaptureNow={captureNow}
         onClearSimulation={clearSimulator}
         drawMode={simulationDrawMode}
-        onToggleDrawMode={() => setSimulationDrawMode((prev) => !prev)}
+        onToggleDrawMode={() => {
+          setSimulationDrawMode((prev) => !prev)
+          setCustomPointMode(false)
+        }}
         draftCircle={draftCircle}
         dronesPerDeployment={dronesPerDeployment}
         onDronesPerDeploymentChange={(next) => setDronesPerDeployment(Math.max(1, Math.min(8, Number.isFinite(next) ? next : 1)))}
@@ -308,6 +493,32 @@ export default function DashboardPage() {
         deployedDrones={deployedDrones}
         deployedZones={coverageCircles.length}
         dispatchCount={dispatchPayloads.length}
+        droneAltitudeM={droneAltitudeM}
+        onDroneAltitudeChange={(next) => setDroneAltitudeM(Math.max(10, Math.min(1000, Number.isFinite(next) ? next : DEFAULT_DRONE_ALTITUDE_M)))}
+        spiralSpacingMeters={spiralSpacingMeters}
+        onSpiralSpacingChange={(next) => setSpiralSpacingMeters(Math.max(10, Math.min(200, Number.isFinite(next) ? next : DEFAULT_SPIRAL_SPACING_METERS)))}
+        folderImageCount={folderImages.length}
+        onSelectImageFolder={(fileList) => {
+          const files = fileList ? Array.from(fileList) : []
+          const images = files.filter((f) => f.type.startsWith("image/"))
+          setFolderImages(images)
+          base64CacheRef.current.clear()
+        }}
+        customPointMode={customPointMode}
+        onToggleCustomPointMode={() => {
+          setCustomPointMode((prev) => !prev)
+          setSimulationDrawMode(false)
+        }}
+        customTestPoint={customTestPoint}
+        onClearCustomTestPoint={() => {
+          setCustomTestPoint(null)
+          customPointTriggeredRef.current = false
+        }}
+        customImageSelected={!!customImageFile}
+        onSelectCustomImage={(file) => {
+          setCustomImageFile(file)
+          if (file) base64CacheRef.current.clear()
+        }}
       />
 
       {/* Layer 2: Bottom dock */}

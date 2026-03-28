@@ -21,9 +21,12 @@ export interface DeployedDrone {
   radiusMeters: number
   lat: number
   lng: number
-  angleRad: number
-  angularVelocity: number
-  orbitMeters: number
+  spiralProgressRad: number
+  spiralAngleOffsetRad: number
+  spiralDirection: 1 | -1
+  spiralSpacingMeters: number
+  spiralOuterRadiusMeters: number
+  spiralCompleted: boolean
   updatedAt: number
 }
 
@@ -147,5 +150,103 @@ export function buildCoverageCollection(circles: CoverageCircle[]): GeoJsonFeatu
   return {
     type: "FeatureCollection",
     features: circles.map((circle) => buildCircleFeature(circle)),
+  }
+}
+
+export function metersOffsetFromLatLng(
+  centerLat: number,
+  centerLng: number,
+  lat: number,
+  lng: number
+) {
+  // Equirectangular approximation: accurate enough for small radii (< a few km)
+  const dLat = toRadians(lat - centerLat)
+  const dLng = toRadians(lng - centerLng)
+  const cosLat = Math.cos(toRadians(centerLat))
+
+  const x = dLng * EARTH_RADIUS_METERS * cosLat
+  const y = dLat * EARTH_RADIUS_METERS
+
+  return { x, y }
+}
+
+export function isInsideCircleMeters(
+  centerLat: number,
+  centerLng: number,
+  radiusMeters: number,
+  lat: number,
+  lng: number
+) {
+  const { x, y } = metersOffsetFromLatLng(centerLat, centerLng, lat, lng)
+  return Math.sqrt(x * x + y * y) <= radiusMeters
+}
+
+export function areaCellKeyForLatLng(
+  centerLat: number,
+  centerLng: number,
+  lat: number,
+  lng: number,
+  cellSizeMeters: number
+) {
+  const size = Number.isFinite(cellSizeMeters) ? Math.max(5, cellSizeMeters) : 20
+  const { x, y } = metersOffsetFromLatLng(centerLat, centerLng, lat, lng)
+  const cellX = Math.floor(x / size)
+  const cellY = Math.floor(y / size)
+  return `${cellX},${cellY}`
+}
+
+export interface SpiralStepInput {
+  centerLat: number
+  centerLng: number
+  outerRadiusMeters: number
+  spacingMeters: number
+  progressRad: number
+  angleOffsetRad: number
+  direction: 1 | -1
+  speedMs: number
+  dtSeconds: number
+}
+
+export interface SpiralStepResult {
+  lat: number
+  lng: number
+  nextProgressRad: number
+  completed: boolean
+  radiusMeters: number
+}
+
+export function stepInwardSpiralConstantSpeed(input: SpiralStepInput): SpiralStepResult {
+  const outerRadius = Math.max(0, input.outerRadiusMeters)
+  const spacing = Math.max(1, input.spacingMeters)
+  const b = spacing / (Math.PI * 2) // radial drop per radian
+  const dt = Math.max(0, input.dtSeconds)
+  const speed = Math.max(0, input.speedMs)
+  const theta = Math.max(0, input.progressRad)
+
+  const radiusNow = Math.max(0, outerRadius - b * theta)
+  if (radiusNow <= 0 || outerRadius <= 0) {
+    return {
+      lat: input.centerLat,
+      lng: input.centerLng,
+      nextProgressRad: theta,
+      completed: true,
+      radiusMeters: 0,
+    }
+  }
+
+  const dsDtheta = Math.sqrt(radiusNow * radiusNow + b * b)
+  const dTheta = dsDtheta > 0 ? (speed * dt) / dsDtheta : 0
+  const nextTheta = theta + dTheta
+  const radiusNext = Math.max(0, outerRadius - b * nextTheta)
+
+  const bearing = input.direction * (nextTheta + input.angleOffsetRad)
+  const nextPos = pointOffset(input.centerLat, input.centerLng, radiusNext, bearing)
+
+  return {
+    lat: nextPos.lat,
+    lng: nextPos.lng,
+    nextProgressRad: nextTheta,
+    completed: radiusNext <= 0,
+    radiusMeters: radiusNext,
   }
 }

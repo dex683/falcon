@@ -33,9 +33,15 @@ interface SeveritySidebarProps {
   autoPan: boolean
   showHeatmap: boolean
   simulationIntervalMs: number
+  droneSpeedMs: number
+  spiralSpacingMeters: number
+  droneAltitudeM: number
   onAutoPanChange: (next: boolean) => void
   onShowHeatmapChange: (next: boolean) => void
   onSimulationIntervalChange: (next: number) => void
+  onDroneSpeedChange: (next: number) => void
+  onSpiralSpacingChange: (next: number) => void
+  onDroneAltitudeChange: (next: number) => void
   onMaxVisibleReportsChange: (next: number) => void
   onResetSettings: () => void
   simulationRunning: boolean
@@ -53,6 +59,16 @@ interface SeveritySidebarProps {
   deployedDrones: DeployedDrone[]
   deployedZones: number
   dispatchCount: number
+
+  folderImageCount: number
+  onSelectImageFolder: (files: FileList | null) => void
+
+  customPointMode: boolean
+  onToggleCustomPointMode: () => void
+  customTestPoint: { lat: number; lng: number; zoneId?: string } | null
+  onClearCustomTestPoint: () => void
+  customImageSelected: boolean
+  onSelectCustomImage: (file: File | null) => void
 }
 
 export function SeveritySidebar({
@@ -64,9 +80,15 @@ export function SeveritySidebar({
   autoPan,
   showHeatmap,
   simulationIntervalMs,
+  droneSpeedMs,
+  spiralSpacingMeters,
+  droneAltitudeM,
   onAutoPanChange,
   onShowHeatmapChange,
   onSimulationIntervalChange,
+  onDroneSpeedChange,
+  onSpiralSpacingChange,
+  onDroneAltitudeChange,
   onMaxVisibleReportsChange,
   onResetSettings,
   simulationRunning,
@@ -84,6 +106,14 @@ export function SeveritySidebar({
   deployedDrones,
   deployedZones,
   dispatchCount,
+  folderImageCount,
+  onSelectImageFolder,
+  customPointMode,
+  onToggleCustomPointMode,
+  customTestPoint,
+  onClearCustomTestPoint,
+  customImageSelected,
+  onSelectCustomImage,
 }: SeveritySidebarProps) {
   const sorted = [...frames].sort((a, b) => b.severity - a.severity)
   const visibleFrames = sorted.slice(0, maxVisibleReports)
@@ -244,6 +274,45 @@ export function SeveritySidebar({
               </div>
 
               <div className="space-y-2">
+                <Label htmlFor="drone-speed">Drone speed (m/s)</Label>
+                <Input
+                  id="drone-speed"
+                  type="number"
+                  min={0.5}
+                  max={25}
+                  step={0.5}
+                  value={droneSpeedMs}
+                  onChange={(e) => onDroneSpeedChange(Number(e.target.value))}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="spiral-gap">Spiral gap (m)</Label>
+                <Input
+                  id="spiral-gap"
+                  type="number"
+                  min={10}
+                  max={200}
+                  step={5}
+                  value={spiralSpacingMeters}
+                  onChange={(e) => onSpiralSpacingChange(Number(e.target.value))}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="altitude">Drone altitude (m)</Label>
+                <Input
+                  id="altitude"
+                  type="number"
+                  min={10}
+                  max={1000}
+                  step={10}
+                  value={droneAltitudeM}
+                  onChange={(e) => onDroneAltitudeChange(Number(e.target.value))}
+                />
+              </div>
+
+              <div className="space-y-2">
                 <Label htmlFor="max-visible">Max reports in severity list</Label>
                 <Input
                   id="max-visible"
@@ -301,6 +370,19 @@ export function SeveritySidebar({
                   </Button>
                 </div>
 
+                <div className="pt-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="w-full"
+                    variant={customPointMode ? "secondary" : "outline"}
+                    onClick={onToggleCustomPointMode}
+                  >
+                    <Plane className="h-3.5 w-3.5" />
+                    {customPointMode ? "Pick Test Point (Armed)" : "Pick Test Point"}
+                  </Button>
+                </div>
+
                 <div className="grid grid-cols-2 gap-2 text-xs text-[oklch(0.60_0_0)]">
                   <span>Zones: {deployedZones}</span>
                   <span>Status: {simulationRunning ? "Running" : "Stopped"}</span>
@@ -314,6 +396,23 @@ export function SeveritySidebar({
                   </div>
                 ) : (
                   <p className="text-xs text-[oklch(0.55_0_0)]">No draft circle selected yet.</p>
+                )}
+
+                {customTestPoint ? (
+                  <div className="rounded-lg border border-[oklch(0.24_0.005_240/60%)] bg-[oklch(0.12_0_0/50%)] p-2 text-xs text-[oklch(0.75_0_0)]">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="font-medium text-[oklch(0.90_0_0)]">Custom test point set</p>
+                        <p className="font-mono">{customTestPoint.lat.toFixed(4)}, {customTestPoint.lng.toFixed(4)}</p>
+                        <p className="text-[11px] text-[oklch(0.55_0_0)]">{customTestPoint.zoneId ? `Zone: ${customTestPoint.zoneId}` : "Not inside a deployed zone"}</p>
+                      </div>
+                      <Button type="button" size="sm" variant="ghost" onClick={onClearCustomTestPoint}>
+                        Clear
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-[oklch(0.55_0_0)]">No custom test point selected.</p>
                 )}
 
                 <div className="space-y-1.5">
@@ -332,6 +431,37 @@ export function SeveritySidebar({
                   <Radar className="h-4 w-4" />
                   Deploy
                 </Button>
+              </div>
+
+              <div className="space-y-3 rounded-xl border border-[oklch(0.24_0.005_240/60%)] p-4">
+                <div>
+                  <p className="text-sm font-medium text-[oklch(0.96_0_0)]">Images</p>
+                  <p className="text-xs text-[oklch(0.55_0_0)]">Pick a folder; images are chosen randomly per capture.</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="image-folder">Image folder</Label>
+                  <Input
+                    id="image-folder"
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    onChange={(e) => onSelectImageFolder(e.target.files)}
+                    {...({ webkitdirectory: "" } as any)}
+                  />
+                  <p className="text-[11px] text-[oklch(0.55_0_0)]">Loaded: {folderImageCount}</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="custom-image">Custom image (optional)</Label>
+                  <Input
+                    id="custom-image"
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => onSelectCustomImage(e.target.files?.[0] ?? null)}
+                  />
+                  <p className="text-[11px] text-[oklch(0.55_0_0)]">Selected: {customImageSelected ? "Yes" : "No"}</p>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
