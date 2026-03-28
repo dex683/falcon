@@ -7,6 +7,7 @@ import { toast } from "@/hooks/use-toast"
 import { SeveritySidebar } from "@/components/severity-sidebar"
 import { BottomDock, type DashboardView } from "@/components/bottom-dock"
 import dynamic from "next/dynamic"
+
 import {
   areaCellKeyForLatLng,
   distanceMeters,
@@ -19,6 +20,7 @@ import {
   type DeployedDrone,
   type SimulatorDispatchPayload,
 } from "@/lib/simulator"
+
 
 // Dynamically import the map to avoid SSR issues with maplibre-gl
 const LiveMap = dynamic(() => import("@/components/live-map").then((m) => m.LiveMap), {
