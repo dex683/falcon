@@ -120,7 +120,7 @@ def api_status():
         "connected_clients": len(connected_clients),
         "simulation": drone_sim.get_status(),
         "ml_model": _detector_name,
-        "categories": ["fire", "flood", "destruction", "good"],
+        "categories": ["no_damage", "low", "medium", "high", "severe"],
         "severity_scale": "1–10",
         "frames_processed": detector.frame_count,
     })

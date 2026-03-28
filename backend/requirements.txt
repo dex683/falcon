@@ -8,3 +8,5 @@ python-engineio
 python-socketio
 google-genai
 python-dotenv
+torch
+torchvision
