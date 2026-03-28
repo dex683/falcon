@@ -9,10 +9,18 @@ streams annotated results to the frontend via WebSockets.
 import eventlet
 eventlet.monkey_patch()
 
+import os
 import time
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
+
+# Load .env file if present (before reading env vars)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 from ml_processor import DamageDetector
 from drone_simulator import DroneSimulator
@@ -32,8 +40,27 @@ socketio = SocketIO(
     max_http_buffer_size=16 * 1024 * 1024,  # 16MB for large images
 )
 
+# ─── Detector Selection ─────────────────────────────────────────────
+_use_gemini = os.environ.get("USE_GEMINI_FALLBACK", "0").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+
+if _use_gemini:
+    try:
+        from gemini_processor import GeminiDamageDetector
+        detector = GeminiDamageDetector()
+        _detector_name = "GeminiDamageDetector (gemini-2.0-flash)"
+        print("[Detector] ✅ Using Gemini Vision API for damage detection")
+    except Exception as _e:
+        print(f"[Detector] ⚠️  Gemini init failed ({_e}), falling back to mock model")
+        detector = DamageDetector(min_detections=1, max_detections=5)
+        _detector_name = "DamageDetector-Mock (fire|flood|destruction|good)"
+else:
+    detector = DamageDetector(min_detections=1, max_detections=5)
+    _detector_name = "DamageDetector-Mock (fire|flood|destruction|good)"
+    print("[Detector] Using Mock ML model (set USE_GEMINI_FALLBACK=1 to enable Gemini)")
+
 # ─── Services ────────────────────────────────────────────────────────
-detector = DamageDetector(min_detections=1, max_detections=5)
 drone_sim = DroneSimulator(socketio, detector=detector)
 
 # ─── Connection Tracking ─────────────────────────────────────────────
@@ -65,7 +92,7 @@ def api_status():
         "uptime": time.time(),
         "connected_clients": len(connected_clients),
         "simulation": drone_sim.get_status(),
-        "ml_model": "DamageDetector-Mock (fire|flood|destruction|good)",
+        "ml_model": _detector_name,
         "categories": ["fire", "flood", "destruction", "good"],
         "severity_scale": "1–10",
         "frames_processed": detector.frame_count,

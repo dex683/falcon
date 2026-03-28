@@ -56,6 +56,7 @@ export default function DashboardPage() {
   const [draftCircle, setDraftCircle] = useState<CircleDraft | null>(null)
   const [coverageCircles, setCoverageCircles] = useState<CoverageCircle[]>([])
   const [deployedDrones, setDeployedDrones] = useState<DeployedDrone[]>([])
+  const [completedDrones, setCompletedDrones] = useState(0)
   const [dispatchPayloads, setDispatchPayloads] = useState<SimulatorDispatchPayload[]>([])
   const [dronesPerDeployment, setDronesPerDeployment] = useState(1)
 
@@ -294,6 +295,7 @@ export default function DashboardPage() {
     setDispatchPayloads([])
     setCoverageCircles([])
     setDeployedDrones([])
+    setCompletedDrones(0)
     setDraftCircle(null)
     setSimulationDrawMode(false)
     setCustomPointMode(false)
@@ -316,9 +318,11 @@ export default function DashboardPage() {
 
         const speed = Number.isFinite(droneSpeedMs) ? Math.max(0, droneSpeedMs) : DEFAULT_DRONE_SPEED_MS
 
-        const moved = prev.map((drone) => {
+        let completedNow = 0
+        const moved = prev.flatMap((drone) => {
           if (drone.spiralCompleted) {
-            return { ...drone, updatedAt: now }
+            completedNow += 1
+            return []
           }
 
           const next = stepInwardSpiralConstantSpeed({
@@ -333,15 +337,28 @@ export default function DashboardPage() {
             dtSeconds: dt,
           })
 
-          return {
+          if (next.completed) {
+            completedNow += 1
+            return []
+          }
+
+          return [{
             ...drone,
             spiralProgressRad: next.nextProgressRad,
-            spiralCompleted: next.completed,
+            spiralCompleted: false,
             lat: next.lat,
             lng: next.lng,
             updatedAt: now,
-          }
+          }]
         })
+
+        if (completedNow > 0) {
+          setCompletedDrones((count) => count + completedNow)
+        }
+
+        if (moved.length === 0 && prev.length > 0) {
+          setSimulationRunning(false)
+        }
 
         queueCapturesForDrones(moved, "tick")
         return moved
@@ -390,6 +407,10 @@ export default function DashboardPage() {
       : status === "disconnected" || status === "error"
         ? "bg-[oklch(0.62_0.23_25)]"
         : "bg-[oklch(0.55_0_0)]"
+
+    const simulatorStatusText = simulationRunning
+      ? (deployedDrones.length > 0 ? "Running" : "Completed")
+      : (deployedDrones.length > 0 ? "Paused" : (completedDrones > 0 ? "Completed" : "Stopped"))
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[oklch(0.10_0_0)]">
@@ -491,6 +512,8 @@ export default function DashboardPage() {
         onDronesPerDeploymentChange={(next) => setDronesPerDeployment(Math.max(1, Math.min(8, Number.isFinite(next) ? next : 1)))}
         onDeployFromCircle={deployFromDraftCircle}
         deployedDrones={deployedDrones}
+        completedDrones={completedDrones}
+        simulatorStatusText={simulatorStatusText}
         deployedZones={coverageCircles.length}
         dispatchCount={dispatchPayloads.length}
         droneAltitudeM={droneAltitudeM}

@@ -57,6 +57,8 @@ interface SeveritySidebarProps {
   onDronesPerDeploymentChange: (next: number) => void
   onDeployFromCircle: () => void
   deployedDrones: DeployedDrone[]
+  completedDrones: number
+  simulatorStatusText: string
   deployedZones: number
   dispatchCount: number
 
@@ -104,6 +106,8 @@ export function SeveritySidebar({
   onDronesPerDeploymentChange,
   onDeployFromCircle,
   deployedDrones,
+  completedDrones,
+  simulatorStatusText,
   deployedZones,
   dispatchCount,
   folderImageCount,
@@ -339,13 +343,18 @@ export function SeveritySidebar({
                   <p className="text-lg font-semibold tabular-nums text-[oklch(0.96_0_0)]">{simulatedCount}</p>
                 </div>
                 <div className="rounded-xl border border-[oklch(0.24_0.005_240/60%)] p-3">
-                  <p className="text-xs text-[oklch(0.55_0_0)]">Drones</p>
+                  <p className="text-xs text-[oklch(0.55_0_0)]">Active</p>
                   <p className="text-lg font-semibold tabular-nums text-[oklch(0.96_0_0)]">{deployedDrones.length}</p>
                 </div>
                 <div className="rounded-xl border border-[oklch(0.24_0.005_240/60%)] p-3">
-                  <p className="text-xs text-[oklch(0.55_0_0)]">Dispatches</p>
-                  <p className="text-lg font-semibold tabular-nums text-[oklch(0.96_0_0)]">{dispatchCount}</p>
+                  <p className="text-xs text-[oklch(0.55_0_0)]">Completed</p>
+                  <p className="text-lg font-semibold tabular-nums text-[oklch(0.96_0_0)]">{completedDrones}</p>
                 </div>
+              </div>
+
+              <div className="rounded-xl border border-[oklch(0.24_0.005_240/60%)] p-3">
+                <p className="text-xs text-[oklch(0.55_0_0)]">Dispatches</p>
+                <p className="text-lg font-semibold tabular-nums text-[oklch(0.96_0_0)]">{dispatchCount}</p>
               </div>
 
               <div className="space-y-4 rounded-xl border border-[oklch(0.24_0.005_240/60%)] p-4">
@@ -385,7 +394,7 @@ export function SeveritySidebar({
 
                 <div className="grid grid-cols-2 gap-2 text-xs text-[oklch(0.60_0_0)]">
                   <span>Zones: {deployedZones}</span>
-                  <span>Status: {simulationRunning ? "Running" : "Stopped"}</span>
+                  <span>Status: {simulatorStatusText}</span>
                 </div>
 
                 {draftCircle ? (

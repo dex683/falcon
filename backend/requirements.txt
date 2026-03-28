@@ -6,3 +6,5 @@ pillow
 numpy
 python-engineio
 python-socketio
+google-genai
+python-dotenv
