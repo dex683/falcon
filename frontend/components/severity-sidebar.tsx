@@ -41,6 +41,10 @@ interface SeveritySidebarProps {
   onAutoPanChange: (next: boolean) => void
   onShowHeatmapChange: (next: boolean) => void
   onShow3dBuildingsChange: (next: boolean) => void
+  heatmapRadius: number
+  heatmapIntensity: number
+  onHeatmapRadiusChange: (next: number) => void
+  onHeatmapIntensityChange: (next: number) => void
   onSimulationIntervalChange: (next: number) => void
   onDroneSpeedChange: (next: number) => void
   onDroneAltitudeChange: (next: number) => void
@@ -98,6 +102,10 @@ export function SeveritySidebar({
   onAutoPanChange,
   onShowHeatmapChange,
   onShow3dBuildingsChange,
+  heatmapRadius,
+  heatmapIntensity,
+  onHeatmapRadiusChange,
+  onHeatmapIntensityChange,
   onSimulationIntervalChange,
   onDroneSpeedChange,
   onDroneAltitudeChange,
@@ -279,6 +287,43 @@ export function SeveritySidebar({
                   onCheckedChange={onShowHeatmapChange}
                 />
               </div>
+
+              {showHeatmap && (
+                <div className="space-y-4 rounded-lg bg-[oklch(0.08_0_0/40%)] p-3">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <Label htmlFor="heatmap-radius" className="text-xs text-[oklch(0.70_0_0)]">Point radius</Label>
+                      <span className="font-mono text-[10px] text-[oklch(0.50_0_0)]">{heatmapRadius}</span>
+                    </div>
+                    <Input
+                      id="heatmap-radius"
+                      type="range"
+                      min={10}
+                      max={150}
+                      step={1}
+                      value={heatmapRadius}
+                      onChange={(e) => onHeatmapRadiusChange(Number(e.target.value))}
+                      className="h-2 cursor-pointer"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <Label htmlFor="heatmap-intensity" className="text-xs text-[oklch(0.70_0_0)]">Intensity multiplier</Label>
+                      <span className="font-mono text-[10px] text-[oklch(0.50_0_0)]">{heatmapIntensity.toFixed(1)}</span>
+                    </div>
+                    <Input
+                      id="heatmap-intensity"
+                      type="range"
+                      min={0.1}
+                      max={8}
+                      step={0.1}
+                      value={heatmapIntensity}
+                      onChange={(e) => onHeatmapIntensityChange(Number(e.target.value))}
+                      className="h-2 cursor-pointer"
+                    />
+                  </div>
+                </div>
+              )}
 
               <div className="flex items-center justify-between">
                 <Label htmlFor="3d-buildings">3D buildings</Label>

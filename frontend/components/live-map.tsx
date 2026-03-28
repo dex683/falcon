@@ -49,6 +49,8 @@ interface LiveMapProps {
   autoPan: boolean
   showHeatmap: boolean
   show3dBuildings: boolean
+  heatmapRadius: number
+  heatmapIntensity: number
   drawMode: boolean
   pickPointMode: boolean
   coverageCircles: CoverageCircle[]
@@ -71,6 +73,8 @@ export function LiveMap({
   autoPan,
   showHeatmap,
   show3dBuildings,
+  heatmapRadius,
+  heatmapIntensity,
   drawMode,
   pickPointMode,
   coverageCircles,
@@ -374,8 +378,8 @@ export function LiveMap({
               type="heatmap"
               paint={{
                 "heatmap-weight": ["get", "weight"],
-                "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 10, 1, 15, 3],
-                "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 10, 18, 15, 44],
+                "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 10, heatmapIntensity / 3, 15, heatmapIntensity],
+                "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 10, heatmapRadius * 0.4, 15, heatmapRadius],
                 "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.7, 14, 0.55, 18, 0.35],
                 "heatmap-color": [
                   "interpolate",
