@@ -4,6 +4,9 @@ export interface CoverageCircle {
   centerLng: number
   radiusMeters: number
   createdAt: number
+  locationName?: string
+  populationDensity?: number
+  addressType?: string
 }
 
 export interface CircleDraft {

@@ -24,7 +24,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
-import type { CircleDraft, DeployedDrone } from "@/lib/simulator"
+import type { CircleDraft, DeployedDrone, CoverageCircle } from "@/lib/simulator"
+import { distanceMeters } from "@/lib/simulator"
 
 interface SeveritySidebarProps {
   view: DashboardView
@@ -65,7 +66,7 @@ interface SeveritySidebarProps {
   deployedDrones: DeployedDrone[]
   completedDrones: number
   simulatorStatusText: string
-  deployedZones: number
+  deployedZones: CoverageCircle[]
   dispatchCount: number
 
   folderImageCount: number
@@ -148,13 +149,42 @@ export function SeveritySidebar({
   settingsLoading,
   onUseGeminiChange,
 }: SeveritySidebarProps) {
-  const sorted = [...frames].sort((a, b) => b.severity - a.severity)
-  const visibleFrames = sorted.slice(0, maxVisibleReports)
+  
+  // Filter out good frames
+  const damagedFrames = frames.filter((f) => f.severity > 1)
+
+  // Aggregate frames into zones
+  const zoneReports = deployedZones.map(zone => {
+    const zoneFrames = damagedFrames.filter(f => 
+      distanceMeters(zone.centerLat, zone.centerLng, f.lat, f.lng) <= zone.radiusMeters
+    )
+
+    // Average structural severity of damaged frames
+    const avgSeverity = zoneFrames.length > 0 
+      ? zoneFrames.reduce((acc, f) => acc + f.severity, 0) / zoneFrames.length
+      : 0
+
+    // Apply population density multiplier
+    let combinedSeverity = avgSeverity
+    if (avgSeverity > 0 && zone.populationDensity) {
+      if (zone.populationDensity > 5000) combinedSeverity += 2
+      else if (zone.populationDensity > 2000) combinedSeverity += 1
+    }
+    combinedSeverity = Math.min(10, Math.max(0, Math.round(combinedSeverity)))
+
+    return {
+      ...zone,
+      zoneFrames,
+      combinedSeverity,
+    }
+  }).sort((a, b) => b.combinedSeverity - a.combinedSeverity)
+
+  const visibleZones = zoneReports.slice(0, maxVisibleReports)
 
   const counts = {
-    severe: frames.filter((f) => getSeverityLevel(f.severity) === "severe").length,
-    moderate: frames.filter((f) => getSeverityLevel(f.severity) === "moderate").length,
-    low: frames.filter((f) => getSeverityLevel(f.severity) === "low").length,
+    severe: zoneReports.filter(z => getSeverityLevel(z.combinedSeverity) === "severe").length,
+    moderate: zoneReports.filter(z => getSeverityLevel(z.combinedSeverity) === "moderate").length,
+    low: zoneReports.filter(z => getSeverityLevel(z.combinedSeverity) === "low").length,
   }
 
   const sectionMeta = {
@@ -199,7 +229,7 @@ export function SeveritySidebar({
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-semibold tracking-tight text-foreground">{sectionMeta.title}</h2>
             <span className="ml-auto rounded-full bg-accent px-2 py-0.5 text-xs tabular-nums text-accent-foreground">
-              {frames.length}
+              {deployedZones.length} Zones
             </span>
           </div>
           <p className="text-xs text-muted-foreground">{sectionMeta.subtitle}</p>
@@ -227,43 +257,43 @@ export function SeveritySidebar({
 
         {/* List */}
         <div className="flex-1 overflow-y-auto p-5">
-          {view === "map" && visibleFrames.length === 0 ? (
+          {view === "map" && visibleZones.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-3 p-8 text-center">
               <div className="rounded-full bg-background/40 p-4">
                 <AlertTriangle className="h-6 w-6 text-muted-foreground" />
               </div>
-              <p className="text-sm text-muted-foreground">No incoming reports.</p>
+              <p className="text-sm text-muted-foreground">No active zones deployed.</p>
             </div>
           ) : null}
 
           {view === "map" ? (
             <ul className="overflow-hidden rounded-2xl border border-border/70 divide-y divide-border/70">
-              {visibleFrames.map((frame, idx) => {
-                const level = getSeverityLevel(frame.severity)
+              {visibleZones.map((zone, idx) => {
+                const level = getSeverityLevel(zone.combinedSeverity)
                 const config = SEVERITY_CONFIG[level]
+                
                 return (
                   <li
-                    key={`${frame.frame_id}-${frame.receivedAt}-${idx}`}
-                    className="group flex flex-col gap-1.5 px-5 py-4 transition-colors duration-150 hover:bg-accent/50"
+                    key={`${zone.id}-${idx}`}
+                    className="group flex flex-col gap-2 px-5 py-4 transition-colors duration-150 hover:bg-accent/50"
                   >
                     <div className="flex items-center justify-between">
                       <span className="max-w-44 truncate text-sm font-medium text-foreground">
-                        {frame.label.replace(/_/g, " ")}
+                        {zone.locationName || zone.id}
                       </span>
-                      <SeverityBadge score={frame.severity} />
+                      <SeverityBadge score={zone.combinedSeverity} />
                     </div>
-                    <div className="flex items-center gap-1.5 text-[11px]">
-                      <span
-                        className="h-1.5 w-1.5 shrink-0 rounded-full"
-                        style={{ backgroundColor: config.color }}
-                      />
-                      <span className="font-mono tabular-nums text-muted-foreground">
-                        {frame.lat.toFixed(4)}, {frame.lng.toFixed(4)}
-                      </span>
-                      <span className="text-muted-foreground/60">•</span>
-                      <span className="tabular-nums text-muted-foreground/80">
-                        {new Date(frame.receivedAt).toLocaleTimeString()}
-                      </span>
+                    
+                    <div className="flex flex-col gap-1 text-[11px] text-muted-foreground">
+                      <div className="flex items-center justify-between">
+                        <span className="capitalize">{zone.addressType || "Unknown Area"}</span>
+                        <span>Pop. Density: {zone.populationDensity ? `${zone.populationDensity}/km²` : "N/A"}</span>
+                      </div>
+                      
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: config.color }} />
+                        <span>{zone.zoneFrames.length} total damaged properties</span>
+                      </div>
                     </div>
                   </li>
                 )
@@ -449,8 +479,8 @@ export function SeveritySidebar({
                   <p className="text-lg font-semibold tabular-nums text-[oklch(0.96_0_0)]">{deployedDrones.length}</p>
                 </div>
                 <div className="rounded-xl border border-[oklch(0.24_0.005_240/60%)] p-3">
-                  <p className="text-xs text-[oklch(0.55_0_0)]">Completed</p>
-                  <p className="text-lg font-semibold tabular-nums text-[oklch(0.96_0_0)]">{completedDrones}</p>
+                  <p className="text-xs text-[oklch(0.55_0_0)]">Zones</p>
+                  <p className="text-lg font-semibold tabular-nums text-[oklch(0.96_0_0)]">{deployedZones.length}</p>
                 </div>
               </div>
 
@@ -495,7 +525,7 @@ export function SeveritySidebar({
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 text-xs text-[oklch(0.60_0_0)]">
-                  <span>Zones: {deployedZones}</span>
+                  <span>Zones: {deployedZones.length}</span>
                   <span>Status: {simulatorStatusText}</span>
                 </div>
 

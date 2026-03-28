@@ -15,6 +15,7 @@ from typing import Any
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
+import requests
 
 # Load .env file if present (before reading env vars)
 try:
@@ -187,6 +188,42 @@ def update_settings():
     }
     socketio.emit("settings_changed", payload)
     return jsonify(payload)
+
+
+@app.route("/api/geocode", methods=["GET"])
+def geocode_zone():
+    lat = request.args.get("lat")
+    lng = request.args.get("lng")
+    if not lat or not lng:
+        return jsonify({"error": "Missing lat/lng"}), 400
+        
+    try:
+        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lng}&zoom=14&addressdetails=1"
+        headers = {"User-Agent": "SkeemDroneMapper/1.0"}
+        resp = requests.get(url, headers=headers, timeout=5)
+        data = resp.json() if resp.status_code == 200 else {}
+        
+        display_name = data.get("display_name", f"{lat}, {lng}")
+        location_type = data.get("type", "unknown")
+        addresstype = data.get("addresstype", location_type)
+        
+        density = 1000
+        if addresstype in ["city", "town", "borough", "commercial", "retail"]:
+            density = 8500
+        elif addresstype in ["suburb", "neighbourhood", "residential", "quarter"]:
+            density = 4500
+        elif addresstype in ["village", "hamlet", "municipality"]:
+            density = 800
+        elif addresstype in ["county", "state", "region", "country", "farm", "forest", "water"]:
+            density = 50
+            
+        return jsonify({
+            "location_name": display_name,
+            "population_density": density,
+            "address_type": addresstype
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/simulation/status")

@@ -362,43 +362,57 @@ export default function DashboardPage() {
       createdAt: Date.now(),
     }
 
-    // Pre-compute lawnmower waypoints for the zone (shared by all drones in this zone)
-    const zoneWaypoints = generateLawnmowerWaypoints(
-      draftCircle.centerLat,
-      draftCircle.centerLng,
-      draftCircle.radiusMeters,
-    )
-
-    const count = Math.max(1, Math.min(8, dronesPerDeployment))
-    const freshDrones: DeployedDrone[] = Array.from({ length: count }, (_, index) => {
-      // Each drone starts at a different strip to spread coverage
-      const startWaypointIndex = Math.floor((index / Math.max(1, count)) * Math.max(0, zoneWaypoints.length - 1))
-      const startWaypoint = zoneWaypoints[startWaypointIndex] ?? zoneWaypoints[0]
-
-      return {
-        id: `DRONE-${String(droneCounterRef.current++).padStart(3, "0")}`,
-        label: `Drone ${index + 1}`,
-        zoneId,
-        centerLat: draftCircle.centerLat,
-        centerLng: draftCircle.centerLng,
-        radiusMeters: draftCircle.radiusMeters,
-        lat: startWaypoint ? startWaypoint[0] : draftCircle.centerLat,
-        lng: startWaypoint ? startWaypoint[1] : draftCircle.centerLng,
-        waypoints: zoneWaypoints,
-        waypointIndex: startWaypointIndex,
-        waypointProgressMeters: 0,
-        pathCompleted: false,
-        updatedAt: Date.now(),
-      }
-    })
-
-    // Broadcast to all clients via server
-    emitDeployDrones(freshDrones, zone)
-
-    queueCapturesForDrones(freshDrones, "deploy")
     setDraftCircle(null)
     setSimulationDrawMode(false)
-  }, [draftCircle, dronesPerDeployment, emitDeployDrones, queueCapturesForDrones])
+
+    void (async () => {
+      try {
+        const res = await fetch(`${backendBase}/api/geocode?lat=${zone.centerLat}&lng=${zone.centerLng}`)
+        if (res.ok) {
+          const data = await res.json()
+          zone.locationName = data.location_name
+          zone.populationDensity = data.population_density
+          zone.addressType = data.address_type
+        }
+      } catch (e) {
+        console.error("Geocoding failed:", e)
+      }
+
+      // Pre-compute lawnmower waypoints for the zone (shared by all drones in this zone)
+      const zoneWaypoints = generateLawnmowerWaypoints(
+        zone.centerLat,
+        zone.centerLng,
+        zone.radiusMeters,
+      )
+
+      const count = Math.max(1, Math.min(8, dronesPerDeployment))
+      const freshDrones: DeployedDrone[] = Array.from({ length: count }, (_, index) => {
+        // Each drone starts at a different strip to spread coverage
+        const startWaypointIndex = Math.floor((index / Math.max(1, count)) * Math.max(0, zoneWaypoints.length - 1))
+        const startWaypoint = zoneWaypoints[startWaypointIndex] ?? zoneWaypoints[0]
+
+        return {
+          id: `DRONE-${String(droneCounterRef.current++).padStart(3, "0")}`,
+          label: `Drone ${index + 1}`,
+          zoneId,
+          centerLat: zone.centerLat,
+          centerLng: zone.centerLng,
+          radiusMeters: zone.radiusMeters,
+          lat: startWaypoint ? startWaypoint[0] : zone.centerLat,
+          lng: startWaypoint ? startWaypoint[1] : zone.centerLng,
+          waypoints: zoneWaypoints,
+          waypointIndex: startWaypointIndex,
+          waypointProgressMeters: 0,
+          pathCompleted: false,
+          updatedAt: Date.now(),
+        }
+      })
+
+      // Broadcast to all clients via server
+      emitDeployDrones(freshDrones, zone)
+      queueCapturesForDrones(freshDrones, "deploy")
+    })()
+  }, [backendBase, draftCircle, dronesPerDeployment, emitDeployDrones, queueCapturesForDrones])
 
   const captureNow = useCallback(() => {
     if (deployedDrones.length === 0) return
@@ -729,7 +743,7 @@ export default function DashboardPage() {
         deployedDrones={deployedDrones}
         completedDrones={completedDrones}
         simulatorStatusText={simulatorStatusText}
-        deployedZones={coverageCircles.length}
+        deployedZones={coverageCircles}
         dispatchCount={dispatchPayloads.length}
         droneAltitudeM={droneAltitudeM}
         onDroneAltitudeChange={(next) => setDroneAltitudeM(Math.max(10, Math.min(1000, Number.isFinite(next) ? next : DEFAULT_DRONE_ALTITUDE_M)))}
