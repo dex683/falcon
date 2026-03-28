@@ -40,7 +40,25 @@ const PLACEHOLDER_FRAME_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2yZ6QAAAAASUVORK5CYII="
 
 export default function DashboardPage() {
-  const { frames, latestFrame, status, frameCount, lastFrameAt, sendDroneFrame } = useSocket()
+  const {
+    frames,
+    latestFrame,
+    status,
+    frameCount,
+    lastFrameAt,
+    sendDroneFrame,
+    // Shared synced state
+    syncedDrones,
+    syncedZones,
+    syncedSimRunning,
+    // Sync emitters
+    emitDeployDrones,
+    emitUpdateDrones,
+    emitRemoveDrones,
+    emitSimControl,
+    emitClearSimulation,
+  } = useSocket()
+
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [activeView, setActiveView] = useState<DashboardView>("map")
   const [autoPan, setAutoPan] = useState(true)
@@ -50,12 +68,11 @@ export default function DashboardPage() {
   const [droneSpeedMs, setDroneSpeedMs] = useState(DEFAULT_DRONE_SPEED_MS)
   const [spiralSpacingMeters, setSpiralSpacingMeters] = useState(DEFAULT_SPIRAL_SPACING_METERS)
   const [droneAltitudeM, setDroneAltitudeM] = useState(DEFAULT_DRONE_ALTITUDE_M)
-  const [simulationRunning, setSimulationRunning] = useState(false)
+
+  // Local-only UI state (not shared) ─────────────────────────────────────
   const [simulatedFrames, setSimulatedFrames] = useState<DroneFrame[]>([])
   const [simulationDrawMode, setSimulationDrawMode] = useState(false)
   const [draftCircle, setDraftCircle] = useState<CircleDraft | null>(null)
-  const [coverageCircles, setCoverageCircles] = useState<CoverageCircle[]>([])
-  const [deployedDrones, setDeployedDrones] = useState<DeployedDrone[]>([])
   const [completedDrones, setCompletedDrones] = useState(0)
   const [dispatchPayloads, setDispatchPayloads] = useState<SimulatorDispatchPayload[]>([])
   const [dronesPerDeployment, setDronesPerDeployment] = useState(1)
@@ -65,14 +82,49 @@ export default function DashboardPage() {
   const [customTestPoint, setCustomTestPoint] = useState<{ lat: number; lng: number; zoneId?: string } | null>(null)
   const [customImageFile, setCustomImageFile] = useState<File | null>(null)
 
+  // Use synced state as the authoritative source for drones & zones
+  const deployedDrones = syncedDrones
+  const coverageCircles = syncedZones
+  const simulationRunning = syncedSimRunning
+
   const frameCounterRef = useRef(1)
   const zoneCounterRef = useRef(1)
   const droneCounterRef = useRef(1)
   const payloadCounterRef = useRef(1)
+  // Tracks the last known count of synced drones to update local counters only once on connect
+  const lastSyncedDroneCountRef = useRef(0)
+
+  // Always-current ref for use inside the tick loop (avoids stale closures)
+  const deployedDronesRef = useRef<DeployedDrone[]>([])
+  useEffect(() => {
+    deployedDronesRef.current = syncedDrones
+  }, [syncedDrones])
 
   const visitedCellsRef = useRef(new Map<string, Set<string>>())
   const base64CacheRef = useRef(new Map<string, string>())
   const customPointTriggeredRef = useRef(false)
+
+  // Keep local counters above the server-provided IDs so we never collide
+  useEffect(() => {
+    if (syncedDrones.length > lastSyncedDroneCountRef.current) {
+      // extract highest drone number seen and push counter past it
+      for (const d of syncedDrones) {
+        const match = d.id.match(/DRONE-(\d+)/)
+        if (match) {
+          const n = parseInt(match[1], 10)
+          if (n >= droneCounterRef.current) droneCounterRef.current = n + 1
+        }
+      }
+      for (const z of syncedZones) {
+        const match = z.id.match(/ZONE-(\d+)/)
+        if (match) {
+          const n = parseInt(match[1], 10)
+          if (n >= zoneCounterRef.current) zoneCounterRef.current = n + 1
+        }
+      }
+      lastSyncedDroneCountRef.current = syncedDrones.length
+    }
+  }, [syncedDrones, syncedZones])
 
   const fileToBase64Raw = useCallback(async (file: File) => {
     const cacheKey = `${file.name}:${file.size}:${file.lastModified}`
@@ -277,12 +329,13 @@ export default function DashboardPage() {
       }
     })
 
-    setCoverageCircles((prev) => [zone, ...prev].slice(0, 80))
-    setDeployedDrones((prev) => [ ...freshDrones, ...prev ])
+    // Broadcast to all clients via server
+    emitDeployDrones(freshDrones, zone)
+
     queueCapturesForDrones(freshDrones, "deploy")
     setDraftCircle(null)
     setSimulationDrawMode(false)
-  }, [draftCircle, dronesPerDeployment, queueCapturesForDrones, spiralSpacingMeters])
+  }, [draftCircle, dronesPerDeployment, emitDeployDrones, queueCapturesForDrones, spiralSpacingMeters])
 
   const captureNow = useCallback(() => {
     if (deployedDrones.length === 0) return
@@ -290,11 +343,11 @@ export default function DashboardPage() {
   }, [deployedDrones, queueCapturesForDrones])
 
   const clearSimulator = useCallback(() => {
-    setSimulationRunning(false)
+    // Broadcast clear to all clients, server will update shared_state
+    emitClearSimulation()
+    // Reset local-only state
     setSimulatedFrames([])
     setDispatchPayloads([])
-    setCoverageCircles([])
-    setDeployedDrones([])
     setCompletedDrones(0)
     setDraftCircle(null)
     setSimulationDrawMode(false)
@@ -303,70 +356,116 @@ export default function DashboardPage() {
     setCustomImageFile(null)
     customPointTriggeredRef.current = false
     visitedCellsRef.current.clear()
-  }, [])
+  }, [emitClearSimulation])
 
+  const sendTestImage = useCallback(() => {
+    if (!customImageFile) return
+
+    const fallbackLat = 28.6139
+    const fallbackLng = 77.209
+
+    const lat = customTestPoint?.lat ?? deployedDrones[0]?.lat ?? fallbackLat
+    const lng = customTestPoint?.lng ?? deployedDrones[0]?.lng ?? fallbackLng
+
+    void (async () => {
+      let imageBase64 = PLACEHOLDER_FRAME_IMAGE_BASE64
+      try {
+        imageBase64 = await fileToBase64Raw(customImageFile)
+      } catch {
+        imageBase64 = PLACEHOLDER_FRAME_IMAGE_BASE64
+      }
+
+      sendDroneFrame(imageBase64, {
+        lat,
+        lng,
+        source: "manual_upload",
+        filename: customImageFile.name,
+        size: customImageFile.size,
+        zone_id: customTestPoint?.zoneId,
+      })
+
+      toast({
+        title: "Test image sent",
+        description: "Waiting for processed severity…",
+      })
+    })()
+  }, [customImageFile, customTestPoint?.lat, customTestPoint?.lng, customTestPoint?.zoneId, deployedDrones, fileToBase64Raw, sendDroneFrame])
+
+  // ─── Simulation Tick ────────────────────────────────────────────────────
+  // Only this client (the one that clicked Start) runs the tick loop.
+  // Position updates are broadcast to all clients via emitUpdateDrones.
   useEffect(() => {
     if (!simulationRunning || deployedDrones.length === 0) return
     const tick = Math.max(500, simulationIntervalMs)
 
     const interval = setInterval(() => {
+      // Read current positions through ref to avoid stale closure
+      const currentDrones = deployedDronesRef.current
+      if (currentDrones.length === 0) return
+
       const now = Date.now()
       const dt = tick / 1000
+      const speed = Number.isFinite(droneSpeedMs) ? Math.max(0, droneSpeedMs) : DEFAULT_DRONE_SPEED_MS
 
-      setDeployedDrones((prev) => {
-        if (prev.length === 0) return prev
+      // Compute next positions from the current synced list
+      let completedNow = 0
+      const removedIds: string[] = []
+      const moved: DeployedDrone[] = []
 
-        const speed = Number.isFinite(droneSpeedMs) ? Math.max(0, droneSpeedMs) : DEFAULT_DRONE_SPEED_MS
+      for (const drone of currentDrones) {
+        if (drone.spiralCompleted) {
+          completedNow += 1
+          removedIds.push(drone.id)
+          continue
+        }
 
-        let completedNow = 0
-        const moved = prev.flatMap((drone) => {
-          if (drone.spiralCompleted) {
-            completedNow += 1
-            return []
-          }
-
-          const next = stepInwardSpiralConstantSpeed({
-            centerLat: drone.centerLat,
-            centerLng: drone.centerLng,
-            outerRadiusMeters: drone.spiralOuterRadiusMeters,
-            spacingMeters: drone.spiralSpacingMeters,
-            progressRad: drone.spiralProgressRad,
-            angleOffsetRad: drone.spiralAngleOffsetRad,
-            direction: drone.spiralDirection,
-            speedMs: speed,
-            dtSeconds: dt,
-          })
-
-          if (next.completed) {
-            completedNow += 1
-            return []
-          }
-
-          return [{
-            ...drone,
-            spiralProgressRad: next.nextProgressRad,
-            spiralCompleted: false,
-            lat: next.lat,
-            lng: next.lng,
-            updatedAt: now,
-          }]
+        const next = stepInwardSpiralConstantSpeed({
+          centerLat: drone.centerLat,
+          centerLng: drone.centerLng,
+          outerRadiusMeters: drone.spiralOuterRadiusMeters,
+          spacingMeters: drone.spiralSpacingMeters,
+          progressRad: drone.spiralProgressRad,
+          angleOffsetRad: drone.spiralAngleOffsetRad,
+          direction: drone.spiralDirection,
+          speedMs: speed,
+          dtSeconds: dt,
         })
 
-        if (completedNow > 0) {
-          setCompletedDrones((count) => count + completedNow)
+        if (next.completed) {
+          completedNow += 1
+          removedIds.push(drone.id)
+          continue
         }
 
-        if (moved.length === 0 && prev.length > 0) {
-          setSimulationRunning(false)
-        }
+        moved.push({
+          ...drone,
+          spiralProgressRad: next.nextProgressRad,
+          spiralCompleted: false,
+          lat: next.lat,
+          lng: next.lng,
+          updatedAt: now,
+        })
+      }
 
+      if (completedNow > 0) {
+        setCompletedDrones((count) => count + completedNow)
+        if (removedIds.length > 0) emitRemoveDrones(removedIds)
+      }
+
+      if (moved.length > 0) {
+        emitUpdateDrones(moved)
         queueCapturesForDrones(moved, "tick")
-        return moved
-      })
+      }
+
+      // If all drones finished, stop simulation
+      if (moved.length === 0 && currentDrones.length > 0) {
+        emitSimControl(false)
+      }
     }, tick)
 
     return () => clearInterval(interval)
-  }, [deployedDrones.length, droneSpeedMs, queueCapturesForDrones, simulationIntervalMs, simulationRunning])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [simulationRunning, deployedDrones.length, droneSpeedMs, simulationIntervalMs])
 
   // Only show backend-processed frames on the map/severity list.
   const combinedFrames = useMemo(
@@ -498,8 +597,8 @@ export default function DashboardPage() {
         }}
         simulationRunning={simulationRunning}
         simulatedCount={simulatedFrames.length}
-        onStartSimulation={() => setSimulationRunning(true)}
-        onStopSimulation={() => setSimulationRunning(false)}
+        onStartSimulation={() => emitSimControl(true)}
+        onStopSimulation={() => emitSimControl(false)}
         onCaptureNow={captureNow}
         onClearSimulation={clearSimulator}
         drawMode={simulationDrawMode}
@@ -542,6 +641,7 @@ export default function DashboardPage() {
           setCustomImageFile(file)
           if (file) base64CacheRef.current.clear()
         }}
+        onSendTestImage={sendTestImage}
       />
 
       {/* Layer 2: Bottom dock */}

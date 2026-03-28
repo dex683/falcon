@@ -71,6 +71,7 @@ interface SeveritySidebarProps {
   onClearCustomTestPoint: () => void
   customImageSelected: boolean
   onSelectCustomImage: (file: File | null) => void
+  onSendTestImage: () => void
 }
 
 export function SeveritySidebar({
@@ -118,6 +119,7 @@ export function SeveritySidebar({
   onClearCustomTestPoint,
   customImageSelected,
   onSelectCustomImage,
+  onSendTestImage,
 }: SeveritySidebarProps) {
   const sorted = [...frames].sort((a, b) => b.severity - a.severity)
   const visibleFrames = sorted.slice(0, maxVisibleReports)
@@ -471,6 +473,16 @@ export function SeveritySidebar({
                   />
                   <p className="text-[11px] text-[oklch(0.55_0_0)]">Selected: {customImageSelected ? "Yes" : "No"}</p>
                 </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={!customImageSelected}
+                  onClick={onSendTestImage}
+                >
+                  Send test image
+                </Button>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
