@@ -21,12 +21,11 @@ export interface DeployedDrone {
   radiusMeters: number
   lat: number
   lng: number
-  spiralProgressRad: number
-  spiralAngleOffsetRad: number
-  spiralDirection: 1 | -1
-  spiralSpacingMeters: number
-  spiralOuterRadiusMeters: number
-  spiralCompleted: boolean
+  // Lawnmower path state
+  waypoints: [number, number][]   // [lat, lng] pairs
+  waypointIndex: number           // index of next target waypoint
+  waypointProgressMeters: number  // metres travelled toward current waypoint
+  pathCompleted: boolean
   updatedAt: number
 }
 
@@ -195,58 +194,120 @@ export function areaCellKeyForLatLng(
   return `${cellX},${cellY}`
 }
 
-export interface SpiralStepInput {
-  centerLat: number
-  centerLng: number
-  outerRadiusMeters: number
-  spacingMeters: number
-  progressRad: number
-  angleOffsetRad: number
-  direction: 1 | -1
+// ─── Lawnmower (Boustrophedon) Path ──────────────────────────────────────────
+
+// Flight constants (match backend drone_simulator.py)
+const ALTITUDE_M   = 100
+const FOV_DEG      = 90
+const OVERLAP_PCT  = 0.75
+// footprint = 2 * altitude * tan(FOV/2)
+const FOOTPRINT_M  = 2 * ALTITUDE_M * Math.tan((FOV_DEG / 2) * (Math.PI / 180))
+const STRIP_SPACING_M = FOOTPRINT_M * (1 - OVERLAP_PCT)  // 25 m at defaults
+
+export function generateLawnmowerWaypoints(
+  centerLat: number,
+  centerLng: number,
+  radiusMeters: number,
+): [number, number][] {
+  const DEG_PER_M_LAT = 1 / 111320
+  const DEG_PER_M_LNG = 1 / (111320 * Math.cos(centerLat * (Math.PI / 180)))
+
+  const radiusLat = radiusMeters * DEG_PER_M_LAT
+  const radiusLng = radiusMeters * DEG_PER_M_LNG
+  const stripDeg  = STRIP_SPACING_M * DEG_PER_M_LNG
+
+  const waypoints: [number, number][] = []
+  let lngOffset = -radiusLng
+  let direction = 1  // +1 south→north, -1 north→south
+
+  while (lngOffset <= radiusLng) {
+    const frac = radiusLng > 0 ? (lngOffset / radiusLng) ** 2 : 0
+    const halfChordLat = radiusLat * Math.sqrt(Math.max(0, 1 - frac))
+
+    const latStart = centerLat + (direction === 1 ? -halfChordLat : halfChordLat)
+    const latEnd   = centerLat + (direction === 1 ?  halfChordLat : -halfChordLat)
+
+    waypoints.push([latStart, centerLng + lngOffset])
+    waypoints.push([latEnd,   centerLng + lngOffset])
+
+    lngOffset += stripDeg
+    direction  *= -1
+  }
+
+  return waypoints
+}
+
+export interface LawnmowerStepInput {
+  drone: DeployedDrone
   speedMs: number
   dtSeconds: number
 }
 
-export interface SpiralStepResult {
+export interface LawnmowerStepResult {
   lat: number
   lng: number
-  nextProgressRad: number
+  waypointIndex: number
+  waypointProgressMeters: number
   completed: boolean
-  radiusMeters: number
 }
 
-export function stepInwardSpiralConstantSpeed(input: SpiralStepInput): SpiralStepResult {
-  const outerRadius = Math.max(0, input.outerRadiusMeters)
-  const spacing = Math.max(1, input.spacingMeters)
-  const b = spacing / (Math.PI * 2) // radial drop per radian
-  const dt = Math.max(0, input.dtSeconds)
-  const speed = Math.max(0, input.speedMs)
-  const theta = Math.max(0, input.progressRad)
+export function stepLawnmower(input: LawnmowerStepInput): LawnmowerStepResult {
+  const { drone, speedMs, dtSeconds } = input
+  const { waypoints } = drone
 
-  const radiusNow = Math.max(0, outerRadius - b * theta)
-  if (radiusNow <= 0 || outerRadius <= 0) {
+  if (!waypoints || waypoints.length === 0 || drone.waypointIndex >= waypoints.length - 1) {
     return {
-      lat: input.centerLat,
-      lng: input.centerLng,
-      nextProgressRad: theta,
+      lat: drone.lat,
+      lng: drone.lng,
+      waypointIndex: drone.waypointIndex,
+      waypointProgressMeters: drone.waypointProgressMeters,
       completed: true,
-      radiusMeters: 0,
     }
   }
 
-  const dsDtheta = Math.sqrt(radiusNow * radiusNow + b * b)
-  const dTheta = dsDtheta > 0 ? (speed * dt) / dsDtheta : 0
-  const nextTheta = theta + dTheta
-  const radiusNext = Math.max(0, outerRadius - b * nextTheta)
+  // Convert lon difference to metres using cos(lat) scaling
+  const DEG_TO_M_LAT = 111320
+  const DEG_TO_M_LNG = 111320 * Math.cos(drone.centerLat * (Math.PI / 180))
 
-  const bearing = input.direction * (nextTheta + input.angleOffsetRad)
-  const nextPos = pointOffset(input.centerLat, input.centerLng, radiusNext, bearing)
+  let remaining = speedMs * dtSeconds  // metres to travel this tick
+  let idx  = drone.waypointIndex
+  let lat  = drone.lat
+  let lng  = drone.lng
+
+  while (remaining > 0 && idx < waypoints.length - 1) {
+    const [tLat, tLng] = waypoints[idx + 1]
+    const dLat = (tLat - lat) * DEG_TO_M_LAT
+    const dLng = (tLng - lng) * DEG_TO_M_LNG
+    const distToNext = Math.hypot(dLat, dLng)
+
+    if (distToNext < 0.001) {
+      // Already at this waypoint, advance
+      lat = tLat
+      lng = tLng
+      idx += 1
+      continue
+    }
+
+    if (remaining >= distToNext) {
+      lat = tLat
+      lng = tLng
+      remaining -= distToNext
+      idx += 1
+    } else {
+      const t = remaining / distToNext
+      lat += (tLat - lat) * t
+      lng += (tLng - lng) * t
+      remaining = 0
+    }
+  }
+
+  const completed = idx >= waypoints.length - 1
 
   return {
-    lat: nextPos.lat,
-    lng: nextPos.lng,
-    nextProgressRad: nextTheta,
-    completed: radiusNext <= 0,
-    radiusMeters: radiusNext,
+    lat,
+    lng,
+    waypointIndex: idx,
+    waypointProgressMeters: 0,
+    completed,
   }
 }

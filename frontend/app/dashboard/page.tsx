@@ -10,9 +10,10 @@ import dynamic from "next/dynamic"
 import {
   areaCellKeyForLatLng,
   distanceMeters,
+  generateLawnmowerWaypoints,
   isInsideCircleMeters,
   pointOffset,
-  stepInwardSpiralConstantSpeed,
+  stepLawnmower,
   type CircleDraft,
   type CoverageCircle,
   type DeployedDrone,
@@ -87,8 +88,9 @@ export default function DashboardPage() {
   const [simulationIntervalMs, setSimulationIntervalMs] = useState(2200)
   const [maxVisibleReports, setMaxVisibleReports] = useState(120)
   const [droneSpeedMs, setDroneSpeedMs] = useState(DEFAULT_DRONE_SPEED_MS)
-  const [spiralSpacingMeters, setSpiralSpacingMeters] = useState(DEFAULT_SPIRAL_SPACING_METERS)
   const [droneAltitudeM, setDroneAltitudeM] = useState(DEFAULT_DRONE_ALTITUDE_M)
+  const [heatmapRadius, setHeatmapRadius] = useState(44)
+  const [heatmapIntensity, setHeatmapIntensity] = useState(3)
 
   // Local-only UI state (not shared) ─────────────────────────────────────
   const [simulatedFrames, setSimulatedFrames] = useState<DroneFrame[]>([])
@@ -97,6 +99,7 @@ export default function DashboardPage() {
   const [completedDrones, setCompletedDrones] = useState(0)
   const [dispatchPayloads, setDispatchPayloads] = useState<SimulatorDispatchPayload[]>([])
   const [dronesPerDeployment, setDronesPerDeployment] = useState(1)
+  const [amISimulating, setAmISimulating] = useState(false)
 
   const [folderImages, setFolderImages] = useState<File[]>([])
   const [customPointMode, setCustomPointMode] = useState(false)
@@ -199,12 +202,11 @@ export default function DashboardPage() {
     const candidates: Candidate[] = []
 
     for (const drone of sourceDrones) {
-      if (drone.spiralCompleted) continue
+      if (drone.pathCompleted) continue
       if (!isInsideCircleMeters(drone.centerLat, drone.centerLng, drone.radiusMeters, drone.lat, drone.lng)) continue
 
-      const cellSize = Math.max(8, drone.spiralSpacingMeters * 0.8)
       const altitudeCell = altitude * ALTITUDE_COVERAGE_CELL_FACTOR
-      const effectiveCellSize = Math.max(cellSize, altitudeCell)
+      const effectiveCellSize = Math.max(8, altitudeCell)
       const cellKey = areaCellKeyForLatLng(drone.centerLat, drone.centerLng, drone.lat, drone.lng, effectiveCellSize)
       const zoneKey = drone.zoneId
 
@@ -322,12 +324,18 @@ export default function DashboardPage() {
       createdAt: Date.now(),
     }
 
+    // Pre-compute lawnmower waypoints for the zone (shared by all drones in this zone)
+    const zoneWaypoints = generateLawnmowerWaypoints(
+      draftCircle.centerLat,
+      draftCircle.centerLng,
+      draftCircle.radiusMeters,
+    )
+
     const count = Math.max(1, Math.min(8, dronesPerDeployment))
-    const outerRadiusMeters = Math.max(15, draftCircle.radiusMeters - 5)
     const freshDrones: DeployedDrone[] = Array.from({ length: count }, (_, index) => {
-      const angleOffset = (index / Math.max(1, count)) * Math.PI * 2
-      const direction: 1 | -1 = index % 2 === 0 ? 1 : -1
-      const startPos = pointOffset(draftCircle.centerLat, draftCircle.centerLng, outerRadiusMeters, direction * angleOffset)
+      // Each drone starts at a different strip to spread coverage
+      const startWaypointIndex = Math.floor((index / Math.max(1, count)) * Math.max(0, zoneWaypoints.length - 1))
+      const startWaypoint = zoneWaypoints[startWaypointIndex] ?? zoneWaypoints[0]
 
       return {
         id: `DRONE-${String(droneCounterRef.current++).padStart(3, "0")}`,
@@ -336,16 +344,12 @@ export default function DashboardPage() {
         centerLat: draftCircle.centerLat,
         centerLng: draftCircle.centerLng,
         radiusMeters: draftCircle.radiusMeters,
-        lat: startPos.lat,
-        lng: startPos.lng,
-        spiralProgressRad: 0,
-        spiralAngleOffsetRad: angleOffset,
-        spiralDirection: direction,
-        spiralSpacingMeters: Number.isFinite(spiralSpacingMeters)
-          ? Math.max(10, Math.min(500, spiralSpacingMeters))
-          : DEFAULT_SPIRAL_SPACING_METERS,
-        spiralOuterRadiusMeters: outerRadiusMeters,
-        spiralCompleted: false,
+        lat: startWaypoint ? startWaypoint[0] : draftCircle.centerLat,
+        lng: startWaypoint ? startWaypoint[1] : draftCircle.centerLng,
+        waypoints: zoneWaypoints,
+        waypointIndex: startWaypointIndex,
+        waypointProgressMeters: 0,
+        pathCompleted: false,
         updatedAt: Date.now(),
       }
     })
@@ -356,7 +360,7 @@ export default function DashboardPage() {
     queueCapturesForDrones(freshDrones, "deploy")
     setDraftCircle(null)
     setSimulationDrawMode(false)
-  }, [draftCircle, dronesPerDeployment, emitDeployDrones, queueCapturesForDrones, spiralSpacingMeters])
+  }, [draftCircle, dronesPerDeployment, emitDeployDrones, queueCapturesForDrones])
 
   const captureNow = useCallback(() => {
     if (deployedDrones.length === 0) return
@@ -367,6 +371,7 @@ export default function DashboardPage() {
     // Broadcast clear to all clients, server will update shared_state
     emitClearSimulation()
     // Reset local-only state
+    setAmISimulating(false)
     setSimulatedFrames([])
     setDispatchPayloads([])
     setCompletedDrones(0)
@@ -413,10 +418,9 @@ export default function DashboardPage() {
   }, [customImageFile, customTestPoint?.lat, customTestPoint?.lng, customTestPoint?.zoneId, deployedDrones, fileToBase64Raw, sendDroneFrame])
 
   // ─── Simulation Tick ────────────────────────────────────────────────────
-  // Only this client (the one that clicked Start) runs the tick loop.
-  // Position updates are broadcast to all clients via emitUpdateDrones.
+  // Only the client that actually clicked "Start" will run the loop, avoiding multi-tab speedups
   useEffect(() => {
-    if (!simulationRunning || deployedDrones.length === 0) return
+    if (!amISimulating || !simulationRunning || deployedDrones.length === 0) return
     const tick = Math.max(500, simulationIntervalMs)
 
     const interval = setInterval(() => {
@@ -434,20 +438,14 @@ export default function DashboardPage() {
       const moved: DeployedDrone[] = []
 
       for (const drone of currentDrones) {
-        if (drone.spiralCompleted) {
+        if (drone.pathCompleted) {
           completedNow += 1
           removedIds.push(drone.id)
           continue
         }
 
-        const next = stepInwardSpiralConstantSpeed({
-          centerLat: drone.centerLat,
-          centerLng: drone.centerLng,
-          outerRadiusMeters: drone.spiralOuterRadiusMeters,
-          spacingMeters: drone.spiralSpacingMeters,
-          progressRad: drone.spiralProgressRad,
-          angleOffsetRad: drone.spiralAngleOffsetRad,
-          direction: drone.spiralDirection,
+        const next = stepLawnmower({
+          drone,
           speedMs: speed,
           dtSeconds: dt,
         })
@@ -460,8 +458,9 @@ export default function DashboardPage() {
 
         moved.push({
           ...drone,
-          spiralProgressRad: next.nextProgressRad,
-          spiralCompleted: false,
+          waypointIndex: next.waypointIndex,
+          waypointProgressMeters: next.waypointProgressMeters,
+          pathCompleted: false,
           lat: next.lat,
           lng: next.lng,
           updatedAt: now,
@@ -480,13 +479,14 @@ export default function DashboardPage() {
 
       // If all drones finished, stop simulation
       if (moved.length === 0 && currentDrones.length > 0) {
+        setAmISimulating(false)
         emitSimControl(false)
       }
     }, tick)
 
     return () => clearInterval(interval)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [simulationRunning, deployedDrones.length, droneSpeedMs, simulationIntervalMs])
+  }, [amISimulating, simulationRunning, deployedDrones.length, droneSpeedMs, simulationIntervalMs])
 
   // Only show backend-processed frames on the map/severity list.
   const combinedFrames = useMemo(
@@ -603,6 +603,8 @@ export default function DashboardPage() {
         autoPan={autoPan}
         showHeatmap={showHeatmap}
         show3dBuildings={show3dBuildings}
+        heatmapRadius={heatmapRadius}
+        heatmapIntensity={heatmapIntensity}
         drawMode={activeView === "simulation" && simulationDrawMode}
         pickPointMode={activeView === "simulation" && customPointMode}
         coverageCircles={coverageCircles}
@@ -650,6 +652,10 @@ export default function DashboardPage() {
         onSimulationIntervalChange={(next) => setSimulationIntervalMs(Math.max(500, Math.min(10000, Number.isFinite(next) ? next : 2200)))}
         onDroneSpeedChange={(next) => setDroneSpeedMs(Math.max(0.5, Math.min(50, Number.isFinite(next) ? next : DEFAULT_DRONE_SPEED_MS)))}
         onMaxVisibleReportsChange={(next) => setMaxVisibleReports(Math.max(20, Math.min(300, Number.isFinite(next) ? next : 120)))}
+        heatmapRadius={heatmapRadius}
+        heatmapIntensity={heatmapIntensity}
+        onHeatmapRadiusChange={(next) => setHeatmapRadius(Math.max(5, Math.min(200, Number.isFinite(next) ? next : 44)))}
+        onHeatmapIntensityChange={(next) => setHeatmapIntensity(Math.max(0.1, Math.min(20, Number.isFinite(next) ? next : 3)))}
         onResetSettings={() => {
           setAutoPan(true)
           setShowHeatmap(false)
@@ -657,13 +663,20 @@ export default function DashboardPage() {
           setSimulationIntervalMs(2200)
           setMaxVisibleReports(120)
           setDroneSpeedMs(DEFAULT_DRONE_SPEED_MS)
-          setSpiralSpacingMeters(DEFAULT_SPIRAL_SPACING_METERS)
           setDroneAltitudeM(DEFAULT_DRONE_ALTITUDE_M)
+          setHeatmapRadius(44)
+          setHeatmapIntensity(3)
         }}
         simulationRunning={simulationRunning}
         simulatedCount={simulatedFrames.length}
-        onStartSimulation={() => emitSimControl(true)}
-        onStopSimulation={() => emitSimControl(false)}
+        onStartSimulation={() => {
+          setAmISimulating(true)
+          emitSimControl(true)
+        }}
+        onStopSimulation={() => {
+          setAmISimulating(false)
+          emitSimControl(false)
+        }}
         onCaptureNow={captureNow}
         onClearSimulation={clearSimulator}
         drawMode={simulationDrawMode}
@@ -682,8 +695,6 @@ export default function DashboardPage() {
         dispatchCount={dispatchPayloads.length}
         droneAltitudeM={droneAltitudeM}
         onDroneAltitudeChange={(next) => setDroneAltitudeM(Math.max(10, Math.min(1000, Number.isFinite(next) ? next : DEFAULT_DRONE_ALTITUDE_M)))}
-        spiralSpacingMeters={spiralSpacingMeters}
-        onSpiralSpacingChange={(next) => setSpiralSpacingMeters(Math.max(10, Math.min(500, Number.isFinite(next) ? next : DEFAULT_SPIRAL_SPACING_METERS)))}
         folderImageCount={folderImages.length}
         onSelectImageFolder={(fileList) => {
           const files = fileList ? Array.from(fileList) : []

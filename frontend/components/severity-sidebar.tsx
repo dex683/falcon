@@ -37,14 +37,12 @@ interface SeveritySidebarProps {
   show3dBuildings: boolean
   simulationIntervalMs: number
   droneSpeedMs: number
-  spiralSpacingMeters: number
   droneAltitudeM: number
   onAutoPanChange: (next: boolean) => void
   onShowHeatmapChange: (next: boolean) => void
   onShow3dBuildingsChange: (next: boolean) => void
   onSimulationIntervalChange: (next: number) => void
   onDroneSpeedChange: (next: number) => void
-  onSpiralSpacingChange: (next: number) => void
   onDroneAltitudeChange: (next: number) => void
   onMaxVisibleReportsChange: (next: number) => void
   onResetSettings: () => void
@@ -96,14 +94,12 @@ export function SeveritySidebar({
   show3dBuildings,
   simulationIntervalMs,
   droneSpeedMs,
-  spiralSpacingMeters,
   droneAltitudeM,
   onAutoPanChange,
   onShowHeatmapChange,
   onShow3dBuildingsChange,
   onSimulationIntervalChange,
   onDroneSpeedChange,
-  onSpiralSpacingChange,
   onDroneAltitudeChange,
   onMaxVisibleReportsChange,
   onResetSettings,
@@ -126,6 +122,8 @@ export function SeveritySidebar({
   dispatchCount,
   folderImageCount,
   onSelectImageFolder,
+  videoFile,
+  onSelectVideo,
   customPointMode,
   onToggleCustomPointMode,
   customTestPoint,
@@ -360,19 +358,6 @@ export function SeveritySidebar({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="spiral-gap">Spiral gap (m)</Label>
-                <Input
-                  id="spiral-gap"
-                  type="number"
-                  min={10}
-                  max={500}
-                  step={5}
-                  value={spiralSpacingMeters}
-                  onChange={(e) => onSpiralSpacingChange(Number(e.target.value))}
-                />
-              </div>
-
-              <div className="space-y-2">
                 <Label htmlFor="altitude">Drone altitude (m)</Label>
                 <Input
                   id="altitude"
@@ -528,6 +513,17 @@ export function SeveritySidebar({
                     {...({ webkitdirectory: "" } as any)}
                   />
                   <p className="text-[11px] text-[oklch(0.55_0_0)]">Loaded: {folderImageCount}</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="video-upload">Aerial video</Label>
+                  <Input
+                    id="video-upload"
+                    type="file"
+                    accept="video/mp4,video/x-m4v,video/*"
+                    onChange={(e) => onSelectVideo(e.target.files?.[0] ?? null)}
+                  />
+                  <p className="text-[11px] text-[oklch(0.55_0_0)]">Loaded: {videoFile ? videoFile.name : "None"}</p>
                 </div>
 
                 <div className="space-y-1.5">

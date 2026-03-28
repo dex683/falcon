@@ -23,10 +23,59 @@ SAMPLE_IMAGES_DIR = os.path.join(os.path.dirname(__file__), "sample_images")
 DEFAULT_INTERVAL = 2.0  # seconds between frames
 IMAGE_SIZE = (640, 480)
 
-# Simulated flight path — starting coordinates (approx. somewhere interesting)
+# Simulated flight — starting coordinates (fallback if no zone given)
 START_LAT = 12.9716
 START_LNG = 77.5946
-ALTITUDE_RANGE = (30, 120)  # meters
+
+# Flight constants
+ALTITUDE_M = 100         # metres above ground
+SPEED_KMH = 40           # ground speed
+CAMERA_FOV_DEG = 90      # full-angle horizontal field of view
+OVERLAP_PCT = 0.75       # side-overlap between adjacent strips
+IMAGE_INTERVAL_S = 2     # one capture every N seconds
+
+# Derived: strip spacing from altitude + camera FOV + overlap
+# footprint width = 2 * altitude * tan(FOV/2)
+_FOOTPRINT_M = 2 * ALTITUDE_M * math.tan(math.radians(CAMERA_FOV_DEG / 2))
+STRIP_SPACING_M = _FOOTPRINT_M * (1 - OVERLAP_PCT)   # 25 m at defaults
+
+
+def generate_lawnmower(center_lat: float, center_lng: float,
+                       radius_m: float, strip_spacing_m: float):
+    """
+    Generate a boustrophedon (lawnmower) waypoint path clipped to a circle.
+
+    Transect lines run north-south (latitude), stepping east along longitude.
+    Longitude degrees are scaled by cos(lat) so that strip spacing is
+    correct in metres.
+    """
+    DEG_PER_M_LAT = 1.0 / 111320.0
+    DEG_PER_M_LNG = 1.0 / (111320.0 * math.cos(math.radians(center_lat)))
+
+    radius_lat = radius_m * DEG_PER_M_LAT
+    radius_lng = radius_m * DEG_PER_M_LNG
+    strip_deg  = strip_spacing_m * DEG_PER_M_LNG   # step along longitude axis
+
+    waypoints: list[tuple[float, float]] = []
+    lng_offset = -radius_lng
+    direction = 1          # +1 = south→north, -1 = north→south
+
+    while lng_offset <= radius_lng:
+        # Half-chord in latitude degrees at this longitude offset
+        # Circle equation: (x/rx)^2 + (y/ry)^2 = 1  →  y = ry * sqrt(1 - (x/rx)^2)
+        frac = (lng_offset / radius_lng) ** 2 if radius_lng else 0
+        half_chord_lat = radius_lat * math.sqrt(max(0.0, 1.0 - frac))
+
+        lat_start = center_lat + (-half_chord_lat if direction == 1 else half_chord_lat)
+        lat_end   = center_lat + ( half_chord_lat if direction == 1 else -half_chord_lat)
+
+        waypoints.append((lat_start, center_lng + lng_offset))
+        waypoints.append((lat_end,   center_lng + lng_offset))
+
+        lng_offset += strip_deg
+        direction *= -1
+
+    return waypoints
 
 
 class DroneSimulator:
@@ -47,10 +96,15 @@ class DroneSimulator:
         # Flight state
         self.lat = START_LAT
         self.lng = START_LNG
-        self.altitude = random.uniform(*ALTITUDE_RANGE)
-        self.heading = random.uniform(0, 360)
+        self.altitude = ALTITUDE_M
+        self.heading = 0.0
         self.battery = 100.0
-        self.speed = 0.0  # m/s
+        self.speed = SPEED_KMH * (1000 / 3600.0)  # m/s
+
+        # Path state
+        self.waypoints = []
+        self.current_waypoint_idx = 0
+        self.last_update_time = None
 
         # Load sample images if available
         self.sample_images = self._load_sample_images()
@@ -156,23 +210,45 @@ class DroneSimulator:
             return self._generate_synthetic_image()
 
     def _update_telemetry(self):
-        """Simulate drone movement and telemetry updates."""
-        # Drift GPS position
-        self.lat += random.uniform(-0.0002, 0.0002)
-        self.lng += random.uniform(-0.0002, 0.0002)
+        """Simulate drone movement and telemetry updates along the lawnmower path."""
+        now = time.time()
+        if not self.last_update_time:
+            self.last_update_time = now
+            return
 
-        # Vary altitude
-        self.altitude += random.uniform(-2, 2)
-        self.altitude = max(ALTITUDE_RANGE[0], min(ALTITUDE_RANGE[1], self.altitude))
+        dt = now - self.last_update_time
+        self.last_update_time = now
 
-        # Heading drift
-        self.heading = (self.heading + random.uniform(-10, 10)) % 360
+        # Calculate distance to move in meters
+        dist_to_move = self.speed * dt
+        dist_deg = dist_to_move / 111320.0
 
-        # Battery drain
-        self.battery = max(0, self.battery - random.uniform(0.05, 0.15))
+        # Interpolate along waypoints
+        while dist_deg > 0 and self.current_waypoint_idx < len(self.waypoints) - 1:
+            target_lat, target_lng = self.waypoints[self.current_waypoint_idx + 1]
+            
+            # Simple euclidean distance and bearing in degrees
+            dlat = target_lat - self.lat
+            dlng = target_lng - self.lng
+            dist_to_target = math.hypot(dlat, dlng)
 
-        # Speed
-        self.speed = random.uniform(2, 8)
+            if dist_deg >= dist_to_target:
+                # Reached or passed the target waypoint
+                self.lat = target_lat
+                self.lng = target_lng
+                dist_deg -= dist_to_target
+                self.current_waypoint_idx += 1
+            else:
+                # Move towards target
+                ratio = dist_deg / dist_to_target
+                self.lat += dlat * ratio
+                self.lng += dlng * ratio
+                # Update heading
+                self.heading = (math.degrees(math.atan2(dlng, dlat)) + 360) % 360
+                dist_deg = 0
+
+        # Battery drain based on elapsed time (e.g. 0.05% per second = ~33 mins flight time)
+        self.battery = max(0, self.battery - (0.05 * dt))
 
     def _get_telemetry(self) -> dict:
         """Return current drone telemetry data."""
@@ -265,17 +341,48 @@ class DroneSimulator:
 
         print(f"[Drone] Simulation stopped after {self.frames_sent} frames")
 
-    def start(self, interval: float = None):
-        """Start the drone simulation."""
+    def start(self, interval: float = None, zone: dict = None):
+        """Start the drone simulation.
+
+        Args:
+            interval: seconds between frame captures
+            zone: optional coverage zone dict with keys
+                  ``centerLat``, ``centerLng``, ``radiusMeters``.
+                  When provided the drone follows a lawnmower sweep
+                  over this circle.  Falls back to a default circle
+                  around START_LAT/START_LNG.
+        """
         if self.running:
             return {"status": "already_running", "frames_sent": self.frames_sent}
 
-        self.interval = interval or DEFAULT_INTERVAL
+        self.interval = interval or IMAGE_INTERVAL_S
         self.running = True
         self.frames_sent = 0
         self.battery = 100.0
-        self.lat = START_LAT
-        self.lng = START_LNG
+
+        # Resolve zone centre and radius
+        if zone and all(k in zone for k in ("centerLat", "centerLng", "radiusMeters")):
+            c_lat = float(zone["centerLat"])
+            c_lng = float(zone["centerLng"])
+            r_m   = float(zone["radiusMeters"])
+        else:
+            c_lat, c_lng, r_m = START_LAT, START_LNG, 500.0
+
+        # Auto-compute strip spacing from flight altitude
+        self.waypoints = generate_lawnmower(c_lat, c_lng, r_m, STRIP_SPACING_M)
+        self.current_waypoint_idx = 0
+
+        if self.waypoints:
+            self.lat, self.lng = self.waypoints[0]
+        else:
+            self.lat, self.lng = c_lat, c_lng
+
+        self.last_update_time = None
+        self.altitude = ALTITUDE_M
+        self.speed = SPEED_KMH * (1000.0 / 3600.0)
+
+        print(f"[Drone] Lawnmower path: {len(self.waypoints)} waypoints, "
+              f"radius={r_m:.0f}m, strip={STRIP_SPACING_M:.1f}m")
 
         self.thread = self.socketio.start_background_task(self._simulation_loop)
 

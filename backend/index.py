@@ -11,6 +11,7 @@ eventlet.monkey_patch()
 
 import os
 import time
+from typing import Any
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
@@ -64,8 +65,14 @@ def _make_detector(use_gemini: bool):
             print(f"[Detector] ⚠️  Gemini init failed ({_e}), falling back to Mock ML")
             return DamageDetector(min_detections=1, max_detections=5), "DamageDetector-Mock", False
     else:
-        print("[Detector] Using Mock ML model (set USE_GEMINI_FALLBACK=1 to enable Gemini)")
-        return DamageDetector(min_detections=1, max_detections=5), "DamageDetector-Mock", True
+        try:
+            d = DamageDetector(min_detections=1, max_detections=5)
+            name = "DamageDetector-MobileNetV2"
+            print("[Detector] ✅ Using MobileNetV2 damage classifier (set USE_GEMINI_FALLBACK=1 for Gemini)")
+            return d, name, True
+        except Exception as _e:
+            print(f"[Detector] ⚠️  Model load failed ({_e}), server cannot start without model")
+            raise
 
 
 # Global mutable detector state
@@ -81,7 +88,7 @@ connected_clients = {}
 # ─── Shared Simulation State ─────────────────────────────────────────
 # This is the single source of truth replayed to every connecting client
 # and broadcast to all clients whenever anything changes.
-shared_state = {
+shared_state: dict[str, Any] = {
     "deployed_drones": [],   # list of DeployedDrone-like dicts
     "coverage_zones": [],    # list of CoverageCircle-like dicts
     "simulation_running": False,
@@ -405,7 +412,10 @@ def handle_start_simulation(data=None):
     """Start the drone simulator."""
     data = data or {}
     interval = data.get("interval", 2.0)
-    result = drone_sim.start(interval=interval)
+    # Use the first (most recent) coverage zone as the sweep area
+    zones = shared_state.get("coverage_zones", [])
+    zone = zones[0] if zones else None
+    result = drone_sim.start(interval=interval, zone=zone)
     print(f"[Server] Simulation control: start → {result['status']}")
     emit("simulation_status", result)
 
