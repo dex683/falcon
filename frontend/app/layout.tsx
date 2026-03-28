@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next"
 import { Inter, Geist_Mono } from "next/font/google"
-import { Toaster } from "@/components/ui/sonner"
+import { Toaster } from "@/components/ui/toaster"
 import { SocketProvider } from "@/context/SocketContext"
 import "./globals.css"
 
@@ -34,17 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className={`${inter.variable} ${geistMono.variable} font-sans antialiased bg-background text-foreground`}>
         <SocketProvider>
           {children}
-          <Toaster
-            position="top-right"
-            toastOptions={{
-              style: {
-                background: "oklch(0.14 0.005 240 / 90%)",
-                backdropFilter: "blur(16px)",
-                border: "1px solid oklch(0.35 0.01 240 / 40%)",
-                color: "oklch(0.96 0 0)",
-              },
-            }}
-          />
+          <Toaster />
         </SocketProvider>
       </body>
     </html>

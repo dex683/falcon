@@ -126,7 +126,7 @@ export function SeveritySidebar({
       {/* Floating panel */}
       <aside
         className={cn(
-          "fixed left-3 top-2  bottom-2 z-30 flex w-88 flex-col rounded-3xl border border-[oklch(0.35_0.01_240/40%)] bg-[oklch(0.13_0.005_240/80%)] shadow-2xl backdrop-blur-2xl transition-transform duration-300 ease-in-out",
+          "fixed left-3 top-2 bottom-2 z-30 flex w-88 flex-col rounded-3xl border border-[oklch(0.35_0.01_240/40%)] bg-[oklch(0.13_0.005_240/80%)] shadow-2xl backdrop-blur-2xl transition-transform duration-300 ease-in-out",
           isOpen ? "translate-x-0" : "-translate-x-full"
         )}
         aria-label="Floating side menu"
@@ -134,19 +134,19 @@ export function SeveritySidebar({
         {/* Header */}
         <div className="flex flex-col gap-3 border-b border-[oklch(0.35_0.01_240/40%)] p-5">
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold tracking-tight text-[oklch(0.96_0_0)]">{sectionMeta.title}</h2>
-            <span className="ml-auto rounded-full bg-[oklch(0.22_0.01_230)] px-2 py-0.5 text-xs tabular-nums text-[oklch(0.55_0_0)]">
+            <h2 className="text-sm font-semibold tracking-tight text-foreground">{sectionMeta.title}</h2>
+            <span className="ml-auto rounded-full bg-accent px-2 py-0.5 text-xs tabular-nums text-accent-foreground">
               {frames.length}
             </span>
           </div>
-          <p className="text-xs text-[oklch(0.55_0_0)]">{sectionMeta.subtitle}</p>
+          <p className="text-xs text-muted-foreground">{sectionMeta.subtitle}</p>
 
           {/* Summary counts */}
           <div className="grid grid-cols-3 gap-2">
             {(["severe", "moderate", "low"] as const).map((level) => (
               <div
                 key={level}
-                className="flex flex-col items-center rounded-xl border border-[oklch(0.35_0.01_240/40%)] bg-[oklch(0.10_0_0/50%)] py-2"
+                className="flex flex-col items-center rounded-xl border border-border bg-background/30 py-2"
               >
                 <span
                   className="text-lg font-bold tabular-nums"
@@ -154,7 +154,7 @@ export function SeveritySidebar({
                 >
                   {counts[level]}
                 </span>
-                <span className="text-[10px] uppercase tracking-wider text-[oklch(0.45_0_0)]">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   {SEVERITY_CONFIG[level].label}
                 </span>
               </div>
@@ -166,41 +166,42 @@ export function SeveritySidebar({
         <div className="flex-1 overflow-y-auto p-5">
           {view === "map" && visibleFrames.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-3 p-8 text-center">
-              <div className="rounded-full bg-[oklch(0.18_0_0)] p-4">
-                <AlertTriangle className="h-6 w-6 text-[oklch(0.35_0_0)]" />
+              <div className="rounded-full bg-background/40 p-4">
+                <AlertTriangle className="h-6 w-6 text-muted-foreground" />
               </div>
-              <p className="text-sm text-[oklch(0.45_0_0)]">Waiting for incoming frames…</p>
+              <p className="text-sm text-muted-foreground"> No incoming reports.</p>
             </div>
           ) : null}
 
           {view === "map" ? (
-            <ul className="overflow-hidden rounded-2xl border border-[oklch(0.24_0.005_240/60%)] divide-y divide-[oklch(0.24_0.005_240/60%)]">
+            <ul className="overflow-hidden rounded-2xl border border-border/70 divide-y divide-border/70">
               {visibleFrames.map((frame, idx) => {
                 const level = getSeverityLevel(frame.severity)
                 const config = SEVERITY_CONFIG[level]
                 return (
                   <li
-                    key={`${frame.frame_id}-${idx}`}
-                    className="group flex flex-col gap-1.5 px-5 py-4 transition-colors duration-150 hover:bg-[oklch(0.16_0.005_240/60%)]"
+                    key={`${frame.frame_id}-${frame.receivedAt}-${idx}`}
+                    className="group flex flex-col gap-1.5 px-5 py-4 transition-colors duration-150 hover:bg-accent/50"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="max-w-40 truncate text-sm font-medium text-[oklch(0.92_0_0)]">
+                      <span className="max-w-44 truncate text-sm font-medium text-foreground">
                         {frame.label.replace(/_/g, " ")}
                       </span>
                       <SeverityBadge score={frame.severity} />
                     </div>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 text-[11px]">
                       <span
                         className="h-1.5 w-1.5 shrink-0 rounded-full"
                         style={{ backgroundColor: config.color }}
                       />
-                      <span className="font-mono text-[11px] text-[oklch(0.45_0_0)]">
+                      <span className="font-mono tabular-nums text-muted-foreground">
                         {frame.lat.toFixed(4)}, {frame.lng.toFixed(4)}
                       </span>
+                      <span className="text-muted-foreground/60">•</span>
+                      <span className="tabular-nums text-muted-foreground/80">
+                        {new Date(frame.receivedAt).toLocaleTimeString()}
+                      </span>
                     </div>
-                    <span className="text-[11px] text-[oklch(0.35_0_0)]">
-                      {new Date(frame.receivedAt).toLocaleTimeString()}
-                    </span>
                   </li>
                 )
               })}

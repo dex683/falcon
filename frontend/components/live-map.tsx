@@ -60,6 +60,29 @@ export function LiveMap({
   const [mapLoaded, setMapLoaded] = useState(false)
   const [drawStart, setDrawStart] = useState<{ lat: number; lng: number } | null>(null)
 
+  useEffect(() => {
+    if (!popupInfo) return
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Element)) {
+        setPopupInfo(null)
+        return
+      }
+
+      // Ignore clicks inside the popup itself.
+      if (target.closest(".maplibregl-popup")) return
+
+      // Ignore clicks on severity markers (they manage popup open state).
+      if (target.closest("[data-severity-marker='true']")) return
+
+      setPopupInfo(null)
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown, true)
+    return () => document.removeEventListener("pointerdown", handlePointerDown, true)
+  }, [popupInfo])
+
   const draftGeoJson = useMemo(() => {
     if (!circleDraft || circleDraft.radiusMeters < 10) return null
     return {
@@ -324,6 +347,7 @@ export function LiveMap({
               <button
                 className="group relative cursor-pointer focus:outline-none"
                 aria-label={`${frame.label} severity ${frame.severity}`}
+                data-severity-marker="true"
               >
                 {/* Outer ring for severe markers */}
                 {isSevere && (

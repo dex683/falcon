@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { DroneFrame } from "@/context/SocketContext"
 import { useSocket } from "@/context/SocketContext"
+import { toast } from "@/hooks/use-toast"
 import { SeveritySidebar } from "@/components/severity-sidebar"
 import { BottomDock, type DashboardView } from "@/components/bottom-dock"
 import dynamic from "next/dynamic"
@@ -25,8 +26,12 @@ const LiveMap = dynamic(() => import("@/components/live-map").then((m) => m.Live
 
 const SIMULATION_LABELS = ["roof_damage", "road_block", "flooding", "debris_field", "fire_damage"]
 
+// 1x1 transparent PNG (raw base64, no data URI prefix) — used as a tiny payload for backend integration.
+const PLACEHOLDER_FRAME_IMAGE_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2yZ6QAAAAASUVORK5CYII="
+
 export default function DashboardPage() {
-  const { frames, latestFrame } = useSocket()
+  const { frames, latestFrame, status, frameCount, lastFrameAt, sendDroneFrame } = useSocket()
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [activeView, setActiveView] = useState<DashboardView>("map")
   const [autoPan, setAutoPan] = useState(true)
@@ -56,13 +61,13 @@ export default function DashboardPage() {
         drone.centerLng,
         Math.max(30, drone.radiusMeters * 0.35)
       )
-      const severity = Math.round(Math.random() * 100) / 10
 
       return {
         frame_id: `SIM-${String(frameCounterRef.current++).padStart(4, "0")}`,
         lat: sample.lat,
         lng: sample.lng,
-        severity,
+        // The backend will compute real severity/label; keep this local record minimal.
+        severity: 0,
         label: SIMULATION_LABELS[Math.floor(Math.random() * SIMULATION_LABELS.length)],
         receivedAt: now,
       }
@@ -78,9 +83,23 @@ export default function DashboardPage() {
       createdAt: now,
     }))
 
+    // Send frames to backend for ML processing. The backend responds via `processed_frame`.
+    for (let i = 0; i < payloadBatch.length; i++) {
+      const payload = payloadBatch[i]
+      sendDroneFrame(PLACEHOLDER_FRAME_IMAGE_BASE64, {
+        lat: payload.lat,
+        lng: payload.lng,
+        source: "frontend_simulator",
+        drone_id: payload.droneId,
+        zone_id: payload.zoneId,
+        image_id: payload.imageId,
+      })
+    }
+
+    // Keep a local record of dispatched frames for UI counts only.
     setSimulatedFrames((prev) => [...generatedFrames, ...prev].slice(0, 500))
     setDispatchPayloads((prev) => [...payloadBatch, ...prev].slice(0, 300))
-  }, [])
+  }, [sendDroneFrame])
 
   const deployFromDraftCircle = useCallback(() => {
     if (!draftCircle) return
@@ -176,15 +195,70 @@ export default function DashboardPage() {
     return () => clearInterval(interval)
   }, [deployedDrones.length, emitFramesForDrones, simulationIntervalMs, simulationRunning])
 
+  // Only show backend-processed frames on the map/severity list.
   const combinedFrames = useMemo(
-    () => [...frames, ...simulatedFrames].sort((a, b) => b.receivedAt - a.receivedAt),
-    [frames, simulatedFrames]
+    () => [...frames].sort((a, b) => b.receivedAt - a.receivedAt),
+    [frames]
   )
 
   const combinedLatestFrame = combinedFrames[0] ?? latestFrame
 
+  const prevStatusRef = useRef(status)
+  useEffect(() => {
+    const prev = prevStatusRef.current
+    if (prev === status) return
+    prevStatusRef.current = status
+
+    if (status === "disconnected" || status === "error") {
+      if (prev === "connected") {
+        toast({
+          title: "Socket disconnected",
+          description: "Live feed is currently offline.",
+          variant: "destructive",
+        })
+      }
+      return
+    }
+
+    if (status === "connected" && (prev === "disconnected" || prev === "error")) {
+      toast({
+        title: "Socket reconnected",
+        description: "Live feed restored.",
+      })
+    }
+  }, [status])
+
+  const statusDotColor =
+    status === "connected"
+      ? "bg-[oklch(0.72_0.19_142)]"
+      : status === "disconnected" || status === "error"
+        ? "bg-[oklch(0.62_0.23_25)]"
+        : "bg-[oklch(0.55_0_0)]"
+
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[oklch(0.10_0_0)]">
+      {/* Status badge (top-right, non-intrusive) */}
+      <div className="fixed right-4 top-4 z-40">
+        <div className="flex h-8 items-center gap-3 rounded-full border border-border bg-surface px-3 text-[11px] text-[oklch(0.75_0_0)] shadow-lg backdrop-blur-xl">
+          <div className="flex items-center gap-2">
+            <span className={`h-2 w-2 rounded-full ${statusDotColor}`} aria-label={`Socket status ${status}`} />
+            <span className="text-[11px]">{status.charAt(0).toUpperCase() + status.slice(1)}</span>
+          </div>
+          <div className="h-4 w-px bg-border/70" />
+          <div className="flex items-center gap-1">
+            <span className="text-[oklch(0.55_0_0)]">Frames</span>
+            <span className="tabular-nums text-[oklch(0.92_0_0)]">{frameCount}</span>
+          </div>
+          <div className="h-4 w-px bg-border/70" />
+          <div className="flex items-center gap-1">
+            <span className="text-[oklch(0.55_0_0)]">Last</span>
+            <span className="tabular-nums text-[oklch(0.92_0_0)]">
+              {lastFrameAt ? new Date(lastFrameAt).toLocaleTimeString() : "—"}
+            </span>
+          </div>
+        </div>
+      </div>
+
       {/* Layer 0: Full-viewport map */}
       <LiveMap
         frames={combinedFrames}
