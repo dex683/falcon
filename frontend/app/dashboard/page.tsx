@@ -6,6 +6,8 @@ import { useSocket } from "@/context/SocketContext"
 import { toast } from "@/hooks/use-toast"
 import { SeveritySidebar } from "@/components/severity-sidebar"
 import { BottomDock, type DashboardView } from "@/components/bottom-dock"
+import { SeverityCountsBar } from "@/components/severity-counts-bar"
+import { cn } from "@/lib/utils"
 import dynamic from "next/dynamic"
 
 import {
@@ -36,7 +38,7 @@ const DEFAULT_DRONE_SPEED_MS = 25
 const DEFAULT_SPIRAL_SPACING_METERS = 200
 const DEFAULT_DRONE_ALTITUDE_M = 120
 const ALTITUDE_COVERAGE_CELL_FACTOR = 0.6
-const CUSTOM_POINT_TRIGGER_METERS = 12
+const CUSTOM_POINT_TRIGGER_METERS = 20
 
 // 1x1 transparent PNG (raw base64, no data URI prefix) — used as a tiny payload for backend integration.
 const PLACEHOLDER_FRAME_IMAGE_BASE64 =
@@ -94,6 +96,33 @@ export default function DashboardPage() {
   const [heatmapRadius, setHeatmapRadius] = useState(44)
   const [heatmapIntensity, setHeatmapIntensity] = useState(3)
 
+  // Load settings from localStorage once
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("skeem_dashboard_settings")
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        if (parsed.autoPan !== undefined) setAutoPan(parsed.autoPan)
+        if (parsed.showHeatmap !== undefined) setShowHeatmap(parsed.showHeatmap)
+        if (parsed.show3dBuildings !== undefined) setShow3dBuildings(parsed.show3dBuildings)
+        if (parsed.simulationIntervalMs !== undefined) setSimulationIntervalMs(parsed.simulationIntervalMs)
+        if (parsed.maxVisibleReports !== undefined) setMaxVisibleReports(parsed.maxVisibleReports)
+        if (parsed.droneSpeedMs !== undefined) setDroneSpeedMs(parsed.droneSpeedMs)
+        if (parsed.droneAltitudeM !== undefined) setDroneAltitudeM(parsed.droneAltitudeM)
+        if (parsed.heatmapRadius !== undefined) setHeatmapRadius(parsed.heatmapRadius)
+        if (parsed.heatmapIntensity !== undefined) setHeatmapIntensity(parsed.heatmapIntensity)
+      }
+    } catch {}
+  }, [])
+
+  // Save settings on change
+  useEffect(() => {
+    localStorage.setItem("skeem_dashboard_settings", JSON.stringify({
+      autoPan, showHeatmap, show3dBuildings, simulationIntervalMs, maxVisibleReports,
+      droneSpeedMs, droneAltitudeM, heatmapRadius, heatmapIntensity
+    }))
+  }, [autoPan, showHeatmap, show3dBuildings, simulationIntervalMs, maxVisibleReports, droneSpeedMs, droneAltitudeM, heatmapRadius, heatmapIntensity])
+
   // Local-only UI state (not shared) ─────────────────────────────────────
   const [simulatedFrames, setSimulatedFrames] = useState<DroneFrame[]>([])
   const [simulationDrawMode, setSimulationDrawMode] = useState(false)
@@ -104,7 +133,7 @@ export default function DashboardPage() {
   const [amISimulating, setAmISimulating] = useState(false)
 
   const [folderImages, setFolderImages] = useState<File[]>([])
-  const [currentFolderImageBase64, setCurrentFolderImageBase64] = useState<string | null>(null)
+  const [droneImageMap, setDroneImageMap] = useState<Record<string, string>>({})
   
   const [videoFile, setVideoFile] = useState<File | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -123,6 +152,17 @@ export default function DashboardPage() {
   const [customPointMode, setCustomPointMode] = useState(false)
   const [customTestPoint, setCustomTestPoint] = useState<{ lat: number; lng: number; zoneId?: string } | null>(null)
   const [customImageFile, setCustomImageFile] = useState<File | null>(null)
+
+  // Drone live stream state
+  const [activeLiveStreamDroneId, setActiveLiveStreamDroneId] = useState<string | null>(null)
+
+  // Feed viewer state
+  const [feedVisible, setFeedVisible] = useState(true)
+  const [feedFullscreen, setFeedFullscreen] = useState(false)
+
+  // Draggable feed position
+  const [feedPosition, setFeedPosition] = useState<{ x: number; y: number }>({ x: -1, y: -1 })
+  const feedDragRef = useRef<{ startX: number; startY: number; startPosX: number; startPosY: number } | null>(null)
 
   // Use synced state as the authoritative source for drones & zones
   const deployedDrones = syncedDrones
@@ -260,6 +300,10 @@ export default function DashboardPage() {
             isCustomPoint = true
             customPointTriggeredRef.current = true
             imageFile = customImageFile ?? imageFile
+            toast({
+              title: "📍 Test point triggered!",
+              description: `${drone.id} reached the custom point (${dist.toFixed(0)}m away). Using test image for prediction.`,
+            })
           }
         }
       }
@@ -304,7 +348,7 @@ export default function DashboardPage() {
         } else if (candidate.imageFile) {
           try {
             imageBase64 = await fileToBase64Raw(candidate.imageFile)
-            setCurrentFolderImageBase64(imageBase64)
+            setDroneImageMap((prev) => ({ ...prev, [candidate.drone.id]: imageBase64 }))
           } catch {
             imageBase64 = PLACEHOLDER_FRAME_IMAGE_BASE64
           }
@@ -614,8 +658,18 @@ export default function DashboardPage() {
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[oklch(0.10_0_0)]">
-      {/* Status badge (top-right, non-intrusive) */}
-      <div className="fixed right-4 top-4 z-40">
+      {/* Top-right: severity counts + status */}
+      <div className="fixed right-4 top-4 z-40 flex items-center gap-2">
+        {/* Severity counts */}
+        <SeverityCountsBar
+          frames={combinedFrames}
+          deployedZones={coverageCircles}
+        />
+
+        {/* Divider */}
+        <div className="h-6 w-px bg-border/40" />
+
+        {/* Status badge */}
         <div className="flex h-8 items-center gap-3 rounded-full border border-border bg-surface px-3 text-[11px] text-[oklch(0.75_0_0)] shadow-lg backdrop-blur-xl">
           <div className="flex items-center gap-2">
             <span className={`h-2 w-2 rounded-full ${statusDotColor}`} aria-label={`Socket status ${status}`} />
@@ -740,7 +794,7 @@ export default function DashboardPage() {
           const files = fileList ? Array.from(fileList) : []
           const images = files.filter((f) => f.type.startsWith("image/"))
           setFolderImages(images)
-          setCurrentFolderImageBase64(null)
+          setDroneImageMap({})
           base64CacheRef.current.clear()
         }}
         videoFile={videoFile}
@@ -766,41 +820,125 @@ export default function DashboardPage() {
         activeModelName={activeModelName}
         settingsLoading={settingsLoading}
         onUseGeminiChange={handleUseGeminiChange}
+        activeLiveStreamDroneId={activeLiveStreamDroneId}
+        onViewDroneLiveStream={(droneId) => {
+          setActiveLiveStreamDroneId(droneId)
+          if (droneId) {
+            setFeedVisible(true)
+            setFeedFullscreen(false)
+            setFeedPosition({ x: -1, y: -1 })
+          }
+        }}
+        feedVisible={feedVisible}
+        onToggleFeedVisible={() => setFeedVisible((v) => !v)}
       />
 
       {/* Layer 2: Bottom dock */}
-      <BottomDock activeView={activeView} onSelect={setActiveView} />
+      <BottomDock activeView={activeView} onSelect={(view) => {
+        if (view === activeView) {
+          // Toggle sidebar if clicking the same view
+          setSidebarOpen((prev) => !prev)
+        } else {
+          // Switch view and ensure sidebar is open
+          setActiveView(view)
+          setSidebarOpen(true)
+        }
+      }} />
 
-      {/* Floating Video Player */}
-      {videoObjectUrl && simulationRunning && (
-        <div className="pointer-events-none absolute bottom-6 right-6 z-50 overflow-hidden rounded-xl border border-[oklch(0.24_0.005_240/60%)] bg-[oklch(0.12_0_0/80%)] shadow-2xl backdrop-blur-sm transition-all duration-300">
-          <div className="bg-[oklch(0.18_0_0/50%)] px-3 py-1.5 text-xs font-medium text-[oklch(0.85_0_0)]">
-            Live Feed:
+      {/* Unified Floating Feed — Draggable + Fullscreen + Closeable */}
+      {feedVisible && activeLiveStreamDroneId && simulationRunning && (videoObjectUrl || droneImageMap[activeLiveStreamDroneId]) && (
+        <div
+          className={cn(
+            "absolute z-50 overflow-hidden rounded-xl border border-[oklch(0.24_0.005_240/60%)] bg-[oklch(0.12_0_0/80%)] shadow-2xl backdrop-blur-sm transition-all duration-300 hover:shadow-[0_0_30px_oklch(0.55_0.18_260/20%)]",
+            feedFullscreen
+              ? "inset-0 rounded-none"
+              : "cursor-grab active:cursor-grabbing"
+          )}
+          style={feedFullscreen ? {} : {
+            left: feedPosition.x >= 0 ? feedPosition.x : undefined,
+            top: feedPosition.y >= 0 ? feedPosition.y : undefined,
+            right: feedPosition.x < 0 ? 24 : undefined,
+            bottom: feedPosition.y < 0 ? 24 : undefined,
+          }}
+          onMouseDown={feedFullscreen ? undefined : (e) => {
+            // Don't drag when clicking buttons
+            if ((e.target as HTMLElement).closest('button')) return
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+            feedDragRef.current = {
+              startX: e.clientX,
+              startY: e.clientY,
+              startPosX: rect.left,
+              startPosY: rect.top,
+            }
+            const onMouseMove = (ev: MouseEvent) => {
+              if (!feedDragRef.current) return
+              const dx = ev.clientX - feedDragRef.current.startX
+              const dy = ev.clientY - feedDragRef.current.startY
+              setFeedPosition({
+                x: feedDragRef.current.startPosX + dx,
+                y: feedDragRef.current.startPosY + dy,
+              })
+            }
+            const onMouseUp = () => {
+              feedDragRef.current = null
+              document.removeEventListener('mousemove', onMouseMove)
+              document.removeEventListener('mouseup', onMouseUp)
+            }
+            document.addEventListener('mousemove', onMouseMove)
+            document.addEventListener('mouseup', onMouseUp)
+          }}
+        >
+          {/* Title bar */}
+          <div className="flex items-center justify-between bg-[oklch(0.18_0_0/50%)] px-3 py-1.5 text-xs font-medium text-[oklch(0.85_0_0)] select-none">
+            <div className="flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
+              <span>Live Feed{activeLiveStreamDroneId ? `: ${activeLiveStreamDroneId}` : ''}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              {/* Fullscreen toggle */}
+              <button
+                onClick={() => {
+                  setFeedFullscreen((v) => !v)
+                  if (!feedFullscreen) setFeedPosition({ x: -1, y: -1 })
+                }}
+                className="flex h-6 w-6 items-center justify-center rounded hover:bg-[oklch(1_0_0/10%)] transition-colors"
+                aria-label={feedFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              >
+                {feedFullscreen ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                )}
+              </button>
+              {/* Close button */}
+              <button
+                onClick={() => setFeedVisible(false)}
+                className="flex h-6 w-6 items-center justify-center rounded hover:bg-[oklch(1_0_0/10%)] transition-colors"
+                aria-label="Close feed"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
           </div>
-          <video
-            ref={videoRef}
-            src={videoObjectUrl}
-            className="w-80 object-cover"
-            autoPlay
-            muted
-            loop
-            playsInline
-          />
-        </div>
-      )}
-
-      {/* Floating Folder Image Player */}
-      {!videoObjectUrl && currentFolderImageBase64 && simulationRunning && (
-        <div className="pointer-events-none absolute bottom-6 right-6 z-50 overflow-hidden rounded-xl border border-[oklch(0.24_0.005_240/60%)] bg-[oklch(0.12_0_0/80%)] shadow-2xl backdrop-blur-sm transition-all duration-300">
-          <div className="bg-[oklch(0.18_0_0/50%)] px-3 py-1.5 text-xs font-medium text-[oklch(0.85_0_0)]">
-            Live Feed: Folder Scan
-          </div>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={currentFolderImageBase64.startsWith("data:") ? currentFolderImageBase64 : `data:image/jpeg;base64,${currentFolderImageBase64}`}
-            alt="Current Drone View"
-            className="w-80 object-cover"
-          />
+          {/* Content */}
+          {videoObjectUrl ? (
+            <video
+              ref={videoRef}
+              src={videoObjectUrl}
+              className={feedFullscreen ? "w-full h-[calc(100%-32px)] object-contain bg-black" : "w-80 object-cover"}
+              autoPlay
+              muted
+              loop
+              playsInline
+            />
+          ) : droneImageMap[activeLiveStreamDroneId!] ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={droneImageMap[activeLiveStreamDroneId!].startsWith("data:") ? droneImageMap[activeLiveStreamDroneId!] : `data:image/jpeg;base64,${droneImageMap[activeLiveStreamDroneId!]}`}
+              alt="Current Drone View"
+              className={feedFullscreen ? "w-full h-[calc(100%-32px)] object-contain bg-black" : "w-80 object-cover"}
+            />
+          ) : null}
         </div>
       )}
     </main>

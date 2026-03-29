@@ -346,6 +346,9 @@ class GeminiDamageDetector:
     def _call_gemini(self, image_b64: str) -> dict | None:
         """Send image to Gemini Vision and return raw parsed JSON or None."""
         try:
+            if image_b64 == "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2yZ6QAAAAASUVORK5CYII=":
+                raise ValueError("Placeholder 1x1 image, skipping Gemini call.")
+                
             image_bytes = base64.b64decode(image_b64)
 
             # Detect MIME type

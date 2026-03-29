@@ -6,9 +6,7 @@ processes them through an ML damage detection pipeline, and
 streams annotated results to the frontend via WebSockets.
 """
 
-import eventlet
-eventlet.monkey_patch()
-
+import threading
 import os
 import time
 from typing import Any
@@ -38,7 +36,7 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode="eventlet",
+    async_mode="threading",
     ping_timeout=60,
     ping_interval=25,
     max_http_buffer_size=16 * 1024 * 1024,  # 16MB for large images
@@ -49,13 +47,22 @@ socketio = SocketIO(
 _GEMINI_ENV_ENABLED = os.environ.get("USE_GEMINI_FALLBACK", "0").strip().lower() in (
     "1", "true", "yes", "on"
 )
-_GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+
+def get_gemini_key():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+    except ImportError:
+        pass
+    return os.environ.get("GEMINI_API_KEY", "").strip()
 
 
 def _make_detector(use_gemini: bool):
     """Build and return a detector instance. Also returns (detector, name, success_flag)."""
     if use_gemini:
-        if not _GEMINI_API_KEY:
+        current_api_key = get_gemini_key()
+        
+        if not current_api_key:
             print("[Detector] ⚠️  GEMINI_API_KEY not set — falling back to Mock ML")
             return DamageDetector(min_detections=1, max_detections=5), "DamageDetector-Mock (fire|flood|destruction|good)", False
         try:
@@ -141,7 +148,7 @@ def get_settings():
     """Return current runtime settings."""
     return jsonify({
         "use_gemini": _active_use_gemini,
-        "gemini_available": bool(_GEMINI_API_KEY),
+        "gemini_available": bool(get_gemini_key()),
         "ml_model": _detector_name,
     })
 
@@ -160,7 +167,7 @@ def update_settings():
         # No change needed
         return jsonify({
             "use_gemini": _active_use_gemini,
-            "gemini_available": bool(_GEMINI_API_KEY),
+            "gemini_available": bool(get_gemini_key()),
             "ml_model": _detector_name,
         })
 
@@ -175,15 +182,15 @@ def update_settings():
     else:
         # Gemini init failed; stay on current detector
         return jsonify({
-            "error": "Gemini initialisation failed. Check GEMINI_API_KEY.",
+            "error": "Gemini initialisation failed. Check GEMINI_API_KEY in backend/.env.",
             "use_gemini": _active_use_gemini,
-            "gemini_available": bool(_GEMINI_API_KEY),
+            "gemini_available": bool(get_gemini_key()),
             "ml_model": _detector_name,
         }), 500
 
     payload = {
         "use_gemini": _active_use_gemini,
-        "gemini_available": bool(_GEMINI_API_KEY),
+        "gemini_available": bool(get_gemini_key()),
         "ml_model": _detector_name,
     }
     socketio.emit("settings_changed", payload)
@@ -437,7 +444,7 @@ def handle_client_deploy_drones(data):
             except Exception as e:
                 print(f"[Worker] Geocode failed: {e}")
 
-        eventlet.spawn(enrich_zone)
+        threading.Thread(target=enrich_zone, daemon=True).start()
 
     shared_state["deployed_drones"] = drones + [
         d for d in shared_state["deployed_drones"]
@@ -562,5 +569,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=5001,
         debug=True,
-        use_reloader=False,  # Avoid double-start with eventlet
+        use_reloader=False,  # Avoid double-start
     )

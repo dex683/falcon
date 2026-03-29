@@ -1,7 +1,7 @@
 "use client"
 
 import { useRef } from "react"
-import { Map, Settings2, Plane } from "lucide-react"
+import { Map, Settings2, Plane, Radio } from "lucide-react"
 import {
   motion,
   useMotionValue,
@@ -19,7 +19,7 @@ const RANGE     = 140           // px influence radius on either side
 
 const SPRING_CFG = { mass: 1, stiffness: 800, damping: 100 }
 
-export type DashboardView = "map" | "settings" | "simulation"
+export type DashboardView = "map" | "settings" | "simulation" | "drones"
 
 interface NavItem {
   icon: React.ElementType
@@ -31,6 +31,7 @@ const NAV_ITEMS: NavItem[] = [
   { icon: Map, label: "Main Map", view: "map" },
   { icon: Settings2, label: "Settings", view: "settings" },
   { icon: Plane, label: "Simulation", view: "simulation" },
+  { icon: Radio, label: "Drones", view: "drones" },
 ]
 
 /* ─── single icon ────────────────────────────────────────────────────── */
@@ -80,7 +81,7 @@ function DockIcon({
         "group relative flex shrink-0 items-center justify-center rounded-xl",
         "transition-[background-color,box-shadow] duration-150",
         isActive
-          ? "bg-[oklch(0.65_0.18_220/18%)] shadow-[0_0_0_1px_oklch(0.65_0.18_220/28%)]"
+          ? "bg-[#695cff]/18 shadow-[0_0_0_1px_#695cff44]"
           : "hover:bg-[oklch(1_0_0/6%)]",
       )}
       aria-label={item.label}
@@ -95,7 +96,7 @@ function DockIcon({
           className={cn(
             "h-5 w-5 transition-colors duration-150",
             isActive
-              ? "text-[oklch(0.65_0.18_220)]"
+              ? "text-[#695cff]"
               : "text-[oklch(0.50_0_0)] group-hover:text-[oklch(0.92_0_0)]",
           )}
           strokeWidth={isActive ? 2.5 : 1.75}
@@ -104,7 +105,7 @@ function DockIcon({
 
       {/* active indicator dot */}
       {isActive && (
-        <span className="absolute -bottom-1.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-[oklch(0.65_0.18_220)]" />
+        <span className="absolute -bottom-1.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-[#695cff]" />
       )}
 
       {/* tooltip */}

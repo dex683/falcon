@@ -404,7 +404,7 @@ export function LiveMap({
             id="coverage-fill"
             type="fill"
             paint={{
-              "fill-color": "#0A84FF",
+              "fill-color": "#695cff",
               "fill-opacity": 0.09,
             }}
           />
@@ -412,7 +412,7 @@ export function LiveMap({
             id="coverage-outline"
             type="line"
             paint={{
-              "line-color": "#0A84FF",
+              "line-color": "#695cff",
               "line-width": 2,
               "line-opacity": 0.75,
             }}
@@ -462,9 +462,9 @@ export function LiveMap({
             anchor="center"
           >
             <div className="relative flex items-center justify-center">
-              <span className="absolute h-8 w-8 rounded-full bg-[oklch(0.65_0.18_220/22%)] blur-[1px]" />
-              <span className="relative flex h-7 w-7 items-center justify-center rounded-full border border-[oklch(0.95_0_0/70%)] bg-[oklch(0.65_0.18_220/92%)] shadow-lg">
-                <Plane className="h-3.5 w-3.5 rotate-45 text-[oklch(0.98_0_0)]" strokeWidth={2.25} />
+              <span className="absolute h-8 w-8 rounded-full bg-[#695cff]/22 blur-[1px]" />
+              <span className="relative flex h-7 w-7 items-center justify-center rounded-full border border-[#695cff]/70 bg-[#695cff]/92 shadow-lg">
+                <Plane className="h-3.5 w-3.5 rotate-45 text-white" strokeWidth={2.25} />
               </span>
             </div>
           </Marker>
