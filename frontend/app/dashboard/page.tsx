@@ -327,6 +327,11 @@ export default function DashboardPage() {
         zoneSet.add(cellKey)
       }
 
+      // If we don't have any image data to send, don't capture a placeholder
+      if (!isCustomPoint && !videoFrameBase64 && !imageFile) {
+        continue
+      }
+
       candidates.push({
         drone,
         lat: drone.lat,
