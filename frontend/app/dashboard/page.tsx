@@ -10,6 +10,7 @@ import { SeverityCountsBar } from "@/components/severity-counts-bar"
 import { cn } from "@/lib/utils"
 import dynamic from "next/dynamic"
 import type { LiveMapRef } from "@/components/live-map"
+import type { ZoneReport, PriorityLocation } from "@/lib/pdf-report"
 
 import {
   areaCellKeyForLatLng,
@@ -163,7 +164,11 @@ export default function DashboardPage() {
   const [feedFullscreen, setFeedFullscreen] = useState(false)
 
   // Report PDF generator state
-  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false)
+  const [isFetchingReport, setIsFetchingReport] = useState<Record<string, boolean>>({})
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState<Record<string, boolean>>({})
+  const [zoneReports, setZoneReports] = useState<Record<string, ZoneReport>>({})
+  const [selectedPriorityLocation, setSelectedPriorityLocation] = useState<PriorityLocation | null>(null)
+  
   const liveMapRef = useRef<LiveMapRef>(null)
 
   // Draggable feed position
@@ -712,6 +717,7 @@ export default function DashboardPage() {
         show3dBuildings={show3dBuildings}
         heatmapRadius={heatmapRadius}
         heatmapIntensity={heatmapIntensity}
+        priorityHighlight={selectedPriorityLocation}
         drawMode={activeView === "simulation" && simulationDrawMode}
         pickPointMode={activeView === "simulation" && customPointMode}
         coverageCircles={coverageCircles}
@@ -852,19 +858,43 @@ export default function DashboardPage() {
         feedVisible={feedVisible}
         onToggleFeedVisible={() => setFeedVisible((v) => !v)}
         onResolveZone={emitResolveZone}
+        zoneReports={zoneReports}
+        isFetchingReport={isFetchingReport}
+        isGeneratingPdf={isGeneratingPdf}
+        selectedPriorityLocation={selectedPriorityLocation}
+        onSelectPriorityLocation={setSelectedPriorityLocation}
+        onDownloadZoneReportPdf={async (zoneId) => {
+          const zone = coverageCircles.find(z => z.id === zoneId)
+          const report = zoneReports[zoneId]
+          if (!zone || !report || isGeneratingPdf[zoneId]) return
+
+          setIsGeneratingPdf(prev => ({...prev, [zoneId]: true}))
+          toast({ title: "Exporting PDF", description: "Capturing map and generating document..." })
+
+          try {
+            const mapScreenshot = liveMapRef.current?.getScreenshot() || null
+            const { generatePdfReport } = await import("@/lib/pdf-report")
+            await generatePdfReport(zone, report, mapScreenshot)
+            toast({ title: "Success", description: "PDF report downloaded." })
+          } catch (e: any) {
+             toast({ title: "Export Failed", description: e.message, variant: "destructive" })
+          } finally {
+            setIsGeneratingPdf(prev => ({...prev, [zoneId]: false}))
+          }
+        }}
         onGenerateZoneReport={async (zoneId) => {
-          if (isGeneratingPdf) return
-          setIsGeneratingPdf(true)
+          if (isFetchingReport[zoneId]) return
+          setIsFetchingReport(prev => ({...prev, [zoneId]: true}))
           
           const zone = coverageCircles.find((z) => z.id === zoneId)
           if (!zone) {
-            setIsGeneratingPdf(false)
+            setIsFetchingReport(prev => ({...prev, [zoneId]: false}))
             return
           }
 
           toast({
-            title: "Generating Report PDF",
-            description: "Analyzing damage data with Gemini...",
+            title: "Analyzing Zone",
+            description: "Generating AI Intelligence Report...",
           })
 
           try {
@@ -892,23 +922,20 @@ export default function DashboardPage() {
             }
             
             const report = await response.json()
-            const mapScreenshot = liveMapRef.current?.getScreenshot() || null
-            const { generatePdfReport } = await import("@/lib/pdf-report")
-            
-            await generatePdfReport(zone, report, mapScreenshot)
+            setZoneReports(prev => ({...prev, [zoneId]: report}))
 
             toast({
-              title: "Success",
-              description: "PDF report downloaded.",
+              title: "Report Ready",
+              description: "AI analysis completed successfully.",
             })
           } catch (e: any) {
              toast({
-              title: "Report Failed",
+              title: "Analysis Failed",
               description: e.message || "An error occurred",
               variant: "destructive",
             })
           } finally {
-            setIsGeneratingPdf(false)
+            setIsFetchingReport(prev => ({...prev, [zoneId]: false}))
           }
         }}
       />

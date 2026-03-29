@@ -23,6 +23,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SeverityBadge } from "@/components/severity-badge"
+import type { ZoneReport, PriorityLocation } from "@/lib/pdf-report"
 import { getSeverityLevel, SEVERITY_CONFIG } from "@/lib/severity"
 import type { DroneFrame } from "@/context/SocketContext"
 import type { DashboardView } from "@/components/bottom-dock"
@@ -108,8 +109,16 @@ interface SeveritySidebarProps {
   feedVisible: boolean
   onToggleFeedVisible: () => void
 
-  // Action to start generating a report
+  // Inline Reports 
+  zoneReports: Record<string, ZoneReport>
+  isFetchingReport: Record<string, boolean>
+  isGeneratingPdf: Record<string, boolean>
+  selectedPriorityLocation: PriorityLocation | null
+  onSelectPriorityLocation: (loc: PriorityLocation | null) => void
+
+  // Actions
   onGenerateZoneReport: (zoneId: string) => void
+  onDownloadZoneReportPdf: (zoneId: string) => void
   onResolveZone: (zoneId: string, resolved: boolean) => void
 }
 
@@ -174,7 +183,13 @@ export function SeveritySidebar({
   onViewDroneLiveStream,
   feedVisible,
   onToggleFeedVisible,
+  zoneReports,
+  isFetchingReport,
+  isGeneratingPdf,
+  selectedPriorityLocation,
+  onSelectPriorityLocation,
   onGenerateZoneReport,
+  onDownloadZoneReportPdf,
   onResolveZone,
 }: SeveritySidebarProps) {
   
@@ -182,7 +197,7 @@ export function SeveritySidebar({
   const damagedFrames = frames.filter((f) => f.severity > 1)
 
   // Aggregate frames into zones
-  const zoneReports = deployedZones.map(zone => {
+  const zoneData = deployedZones.map(zone => {
     const zoneFrames = damagedFrames.filter(f => 
       distanceMeters(zone.centerLat, zone.centerLng, f.lat, f.lng) <= zone.radiusMeters
     )
@@ -207,7 +222,7 @@ export function SeveritySidebar({
     }
   }).sort((a, b) => b.combinedSeverity - a.combinedSeverity)
 
-  const visibleZones = zoneReports.slice(0, maxVisibleReports)
+  const visibleZones = zoneData.slice(0, maxVisibleReports)
 
   const sectionMeta = ({
     map: {
@@ -307,25 +322,64 @@ export function SeveritySidebar({
                               <span>{zone.zoneFrames.length} total damaged properties</span>
                             </div>
                             <div className="flex items-center gap-2">
-                              <Button
-                                variant={zone.resolved ? "outline" : "secondary"}
-                                size="sm"
-                                className="h-6 px-2 text-[10px] gap-1"
-                                onClick={() => onResolveZone(zone.id, !zone.resolved)}
-                              >
-                                {zone.resolved ? "Undo" : "Resolve"}
-                              </Button>
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                className="h-6 px-2 text-[10px] gap-1 bg-surface-border/50 hover:bg-accent hover:text-accent-foreground transition-colors"
-                                onClick={() => onGenerateZoneReport(zone.id)}
-                              >
-                                <FileText className="h-3 w-3" />
-                                Report
-                              </Button>
+                              {zoneReports[zone.id] ? (
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  disabled={isGeneratingPdf[zone.id]}
+                                  className="h-6 px-2 text-[10px] gap-1 bg-surface-border/50 hover:bg-accent hover:text-accent-foreground transition-colors"
+                                  onClick={() => onDownloadZoneReportPdf(zone.id)}
+                                >
+                                  {isGeneratingPdf[zone.id] ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileText className="h-3 w-3" />}
+                                  {isGeneratingPdf[zone.id] ? "Exporting..." : "Export PDF"}
+                                </Button>
+                              ) : (
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  disabled={isFetchingReport[zone.id]}
+                                  className="h-6 px-2 text-[10px] gap-1 bg-surface-border/50 hover:bg-accent hover:text-accent-foreground transition-colors"
+                                  onClick={() => onGenerateZoneReport(zone.id)}
+                                >
+                                  {isFetchingReport[zone.id] ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileText className="h-3 w-3" />}
+                                  {isFetchingReport[zone.id] ? "Analyzing..." : "Intelligence"}
+                                </Button>
+                              )}
                             </div>
                           </div>
+                          
+                          {zoneReports[zone.id] && (
+                            <div className="mt-3 pt-3 border-t border-border/50 text-xs">
+                              <h4 className="font-semibold text-foreground mb-1">Key Insights</h4>
+                              <ul className="mb-4 space-y-1 pl-4 list-disc text-muted-foreground/90 leading-tight">
+                                {zoneReports[zone.id].key_insights.map((insight, i) => (
+                                  <li key={i}>{insight}</li>
+                                ))}
+                              </ul>
+                              
+                              <h4 className="font-semibold text-foreground mb-2">Priority Areas</h4>
+                              <div className="space-y-1.5 mb-1">
+                                {zoneReports[zone.id].priority_locations.map((loc, i) => {
+                                  const isSelected = selectedPriorityLocation?.lat === loc.lat && selectedPriorityLocation?.lng === loc.lng;
+                                  return (
+                                    <button
+                                      key={i}
+                                      onClick={() => onSelectPriorityLocation(isSelected ? null : loc)}
+                                      className={cn(
+                                        "w-full text-left p-2 rounded border transition-colors",
+                                        isSelected 
+                                          ? "bg-accent text-accent-foreground border-accent-foreground/50 shadow-sm" 
+                                          : "bg-background/50 border-border/50 hover:bg-accent/50 text-muted-foreground"
+                                      )}
+                                    >
+                                      <div className="font-medium text-[11px] mb-0.5 text-foreground">Location #{i+1}</div>
+                                      <div className="line-clamp-2 text-[10px] leading-tight">{loc.reason}</div>
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </CardContent>
                     </Card>

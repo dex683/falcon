@@ -22,6 +22,7 @@ import {
   type CoverageCircle,
   type DeployedDrone,
 } from "@/lib/simulator"
+import type { PriorityLocation } from "@/lib/pdf-report"
 import "maplibre-gl/dist/maplibre-gl.css"
 
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/bright"
@@ -57,6 +58,7 @@ interface LiveMapProps {
   deployedDrones: DeployedDrone[]
   circleDraft: CircleDraft | null
   customTestPoint: { lat: number; lng: number } | null
+  priorityHighlight?: PriorityLocation | null
   onCircleDraftChange: (draft: CircleDraft | null) => void
   onCircleDrawComplete: (draft: CircleDraft) => void
   onPickPoint: (pt: { lat: number; lng: number }) => void
@@ -85,6 +87,7 @@ export const LiveMap = forwardRef<LiveMapRef, LiveMapProps>(function LiveMap({
   deployedDrones,
   circleDraft,
   customTestPoint,
+  priorityHighlight,
   onCircleDraftChange,
   onCircleDrawComplete,
   onPickPoint,
@@ -576,6 +579,24 @@ export const LiveMap = forwardRef<LiveMapRef, LiveMapProps>(function LiveMap({
             </div>
           </Popup>
         )}
+        {/* Priority Highlight Marker */}
+        {priorityHighlight ? (
+          <Marker
+            longitude={priorityHighlight.lng}
+            latitude={priorityHighlight.lat}
+            anchor="bottom"
+          >
+            <div className="flex flex-col items-center group">
+              <div className="absolute -top-10 scale-0 transition-transform group-hover:scale-100 bg-background/90 text-foreground px-2 py-1 rounded text-xs whitespace-nowrap shadow-lg border border-border">
+                Priority Area
+              </div>
+              <div className="relative flex h-8 w-8 items-center justify-center">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[oklch(0.6_0.2_30)] opacity-75"></span>
+                <span className="relative inline-flex h-4 w-4 rounded-full bg-[oklch(0.6_0.2_30)] ring-4 ring-background"></span>
+              </div>
+            </div>
+          </Marker>
+        ) : null}
       </MapGL>
     </div>
   )
