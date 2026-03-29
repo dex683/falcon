@@ -79,6 +79,7 @@ interface SocketContextValue {
   emitSimControl: (running: boolean) => void
   emitClearSimulation: () => void
   emitAddZone: (zone: CoverageCircle) => void
+  emitResolveZone: (zoneId: string, resolved: boolean) => void
 }
 
 const SocketContext = createContext<SocketContextValue>({
@@ -103,6 +104,7 @@ const SocketContext = createContext<SocketContextValue>({
   emitSimControl: () => {},
   emitClearSimulation: () => {},
   emitAddZone: () => {},
+  emitResolveZone: () => {},
 })
 
 function normalizeTimestampMs(timestamp: unknown): number {
@@ -199,6 +201,10 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
   const emitAddZone = useCallback((zone: CoverageCircle) => {
     socketRef.current?.emit("client_add_zone", { zone })
+  }, [])
+
+  const emitResolveZone = useCallback((zoneId: string, resolved: boolean) => {
+    socketRef.current?.emit("client_resolve_zone", { zone_id: zoneId, resolved })
   }, [])
 
   // ─── Incoming Frame Processing ────────────────────────────────────────
@@ -303,6 +309,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         emitSimControl,
         emitClearSimulation,
         emitAddZone,
+        emitResolveZone,
       }}
     >
       {children}

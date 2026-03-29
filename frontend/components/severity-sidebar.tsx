@@ -19,6 +19,7 @@ import {
   MapPin,
   Clock,
   Compass,
+  FileText,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SeverityBadge } from "@/components/severity-badge"
@@ -106,6 +107,10 @@ interface SeveritySidebarProps {
   // Feed visibility
   feedVisible: boolean
   onToggleFeedVisible: () => void
+
+  // Action to start generating a report
+  onGenerateZoneReport: (zoneId: string) => void
+  onResolveZone: (zoneId: string, resolved: boolean) => void
 }
 
 export function SeveritySidebar({
@@ -169,6 +174,8 @@ export function SeveritySidebar({
   onViewDroneLiveStream,
   feedVisible,
   onToggleFeedVisible,
+  onGenerateZoneReport,
+  onResolveZone,
 }: SeveritySidebarProps) {
   
   // Filter out good frames
@@ -275,7 +282,10 @@ export function SeveritySidebar({
                   return (
                     <Card
                       key={`${zone.id}-${idx}`}
-                      className="group border-border/50 bg-card/40 py-0 transition-colors duration-150 hover:bg-accent/30"
+                      className={cn(
+                        "group border-border/50 bg-card/40 py-0 transition-colors duration-150 hover:bg-accent/30",
+                        zone.resolved && "opacity-60 grayscale-[0.2]"
+                      )}
                     >
                       <CardContent className="px-4 py-3">
                         <div className="flex items-center justify-between mb-2">
@@ -291,9 +301,30 @@ export function SeveritySidebar({
                             <span>Pop. Density: {zone.populationDensity ? `${zone.populationDensity}/km²` : "N/A"}</span>
                           </div>
                           
-                          <div className="mt-1 flex items-center gap-2">
-                            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: config.color }} />
-                            <span>{zone.zoneFrames.length} total damaged properties</span>
+                          <div className="mt-1 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: config.color }} />
+                              <span>{zone.zoneFrames.length} total damaged properties</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant={zone.resolved ? "outline" : "secondary"}
+                                size="sm"
+                                className="h-6 px-2 text-[10px] gap-1"
+                                onClick={() => onResolveZone(zone.id, !zone.resolved)}
+                              >
+                                {zone.resolved ? "Undo" : "Resolve"}
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                className="h-6 px-2 text-[10px] gap-1 bg-surface-border/50 hover:bg-accent hover:text-accent-foreground transition-colors"
+                                onClick={() => onGenerateZoneReport(zone.id)}
+                              >
+                                <FileText className="h-3 w-3" />
+                                Report
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       </CardContent>

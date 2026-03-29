@@ -233,6 +233,96 @@ def geocode_zone():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/zone_report", methods=["POST"])
+def generate_zone_report_endpoint():
+    """
+    Generate an actionable rescue plan and report for a specific zone using Gemini API.
+    """
+    data = request.get_json(silent=True) or {}
+    zone = data.get("zone")
+    frames = data.get("frames", [])
+
+    if not zone:
+        return jsonify({"error": "Missing 'zone' data"}), 400
+
+    api_key = get_gemini_key()
+    if not api_key:
+        return jsonify({"error": "GEMINI_API_KEY is required for zone reports."}), 400
+
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+    except ImportError:
+        return jsonify({"error": "google-genai package not installed."}), 500
+
+    # Prepare data for Gemini
+    frames_summary = []
+    total_severe = 0
+    total_high = 0
+    for f in frames:
+        sev = f.get("severity", 1)
+        if sev >= 7:
+            total_severe += 1
+        elif sev >= 5:
+            total_high += 1
+        
+        frames_summary.append({
+            "lat": f.get("lat"),
+            "lng": f.get("lng"),
+            "damage_type": f.get("label"),
+            "severity": sev
+        })
+
+    prompt = f"""You are an expert disaster response coordinator.
+You have been provided with data for a coverage zone and damage detections from UAVs.
+
+Zone Information:
+- Location: {zone.get('locationName', 'Unknown')}
+- Population Density: {zone.get('populationDensity', 'Unknown')} people/sqkm
+- Address Type: {zone.get('addressType', 'Unknown')}
+
+Damage Data:
+- Total high severity detections: {total_high}
+- Total severe/critical detections: {total_severe}
+- Frame Details: {json.dumps(frames_summary[:50])}  # (Limiting to 50 for brevity)
+
+Generate a structural rescue plan that includes:
+- 'overall_severity': A score from 1-10 based on the detections and population density.
+- 'summary': A brief paragraph summarizing the situation.
+- 'key_insights': 3-5 bullet points prioritizing actions based on the damage types, severity, and population density.
+- 'rescue_plan': A clear 3-step action plan for responders.
+- 'priority_locations': An array of up to 3 (lat, lng, reason) objects of the most critical spots to check first.
+
+Return ONLY valid JSON. No markdown.
+Format:
+{{
+  "overall_severity": 8,
+  "summary": "...",
+  "key_insights": ["..."],
+  "rescue_plan": ["Step 1...", "Step 2...", "Step 3..."],
+  "priority_locations": [
+    {{"lat": 0.0, "lng": 0.0, "reason": "Severe fire detected in high density residential area"}}
+  ]
+}}
+"""
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[prompt],
+        )
+        text = response.text.strip()
+        import re
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+        report_json = json.loads(text)
+        return jsonify(report_json)
+    except Exception as e:
+        print(f"[Zone Report] Failed to generate: {e}")
+        return jsonify({"error": f"Report generation failed: {str(e)}"}), 500
+
+
+
 @app.route("/api/simulation/status")
 def simulation_status():
     return jsonify(drone_sim.get_status())
@@ -510,6 +600,23 @@ def handle_client_add_zone(data):
         return
     shared_state["coverage_zones"] = ([zone] + shared_state["coverage_zones"])[:80]
     print(f"[State] add_zone: {zone.get('id')}")
+    broadcast_state()
+
+
+@socketio.on("client_resolve_zone")
+def handle_client_resolve_zone(data):
+    """A client marked a zone as resolved or unresolved."""
+    zone_id = data.get("zone_id")
+    resolved = data.get("resolved", True)
+    if not zone_id:
+        return
+        
+    for z in shared_state["coverage_zones"]:
+        if z.get("id") == zone_id:
+            z["resolved"] = resolved
+            break
+            
+    print(f"[State] resolve_zone: {zone_id} -> {resolved}")
     broadcast_state()
 
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, forwardRef, useImperativeHandle } from "react"
 import MapGL, {
   Layer,
   Marker,
@@ -63,11 +63,15 @@ interface LiveMapProps {
   onCancelDrawMode: () => void
 }
 
+export interface LiveMapRef {
+  getScreenshot: () => string | null
+}
+
 interface PopupInfo {
   frame: DroneFrame
 }
 
-export function LiveMap({
+export const LiveMap = forwardRef<LiveMapRef, LiveMapProps>(function LiveMap({
   frames,
   latestFrame,
   autoPan,
@@ -85,8 +89,16 @@ export function LiveMap({
   onCircleDrawComplete,
   onPickPoint,
   onCancelDrawMode,
-}: LiveMapProps) {
+}: LiveMapProps, ref: React.Ref<LiveMapRef>) {
   const mapRef = useRef<MapRef>(null)
+
+  useImperativeHandle(ref, () => ({
+    getScreenshot: () => {
+      if (!mapRef.current) return null
+      const canvas = mapRef.current.getCanvas()
+      return canvas ? canvas.toDataURL("image/png") : null
+    }
+  }), [])
   const [popupInfo, setPopupInfo] = useState<PopupInfo | null>(null)
   const [mapLoaded, setMapLoaded] = useState(false)
   const [drawStart, setDrawStart] = useState<{ lat: number; lng: number } | null>(null)
@@ -567,4 +579,4 @@ export function LiveMap({
       </MapGL>
     </div>
   )
-}
+})

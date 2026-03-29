@@ -9,6 +9,7 @@ import { BottomDock, type DashboardView } from "@/components/bottom-dock"
 import { SeverityCountsBar } from "@/components/severity-counts-bar"
 import { cn } from "@/lib/utils"
 import dynamic from "next/dynamic"
+import type { LiveMapRef } from "@/components/live-map"
 
 import {
   areaCellKeyForLatLng,
@@ -63,6 +64,7 @@ export default function DashboardPage() {
     emitRemoveDrones,
     emitSimControl,
     emitClearSimulation,
+    emitResolveZone,
   } = useSocket()
 
   // ─── Backend ML Settings ────────────────────────────────────────────
@@ -159,6 +161,10 @@ export default function DashboardPage() {
   // Feed viewer state
   const [feedVisible, setFeedVisible] = useState(true)
   const [feedFullscreen, setFeedFullscreen] = useState(false)
+
+  // Report PDF generator state
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false)
+  const liveMapRef = useRef<LiveMapRef>(null)
 
   // Draggable feed position
   const [feedPosition, setFeedPosition] = useState<{ x: number; y: number }>({ x: -1, y: -1 })
@@ -443,7 +449,13 @@ export default function DashboardPage() {
 
     // Broadcast to all clients via server
     emitDeployDrones(freshDrones, zone)
-  }, [draftCircle, dronesPerDeployment, emitDeployDrones])
+
+    // Auto-turn on video feed for the first drone deployed
+    if (!activeLiveStreamDroneId && freshDrones.length > 0) {
+      setActiveLiveStreamDroneId(freshDrones[0].id)
+      setFeedVisible(true)
+    }
+  }, [draftCircle, dronesPerDeployment, emitDeployDrones, activeLiveStreamDroneId])
 
   const captureNow = useCallback(() => {
     if (deployedDrones.length === 0) return
@@ -692,6 +704,7 @@ export default function DashboardPage() {
 
       {/* Layer 0: Full-viewport map */}
       <LiveMap
+        ref={liveMapRef}
         frames={combinedFrames}
         latestFrame={combinedLatestFrame}
         autoPan={autoPan}
@@ -766,6 +779,13 @@ export default function DashboardPage() {
         onStartSimulation={() => {
           setAmISimulating(true)
           emitSimControl(true)
+          
+          if (!activeLiveStreamDroneId && deployedDrones.length > 0) {
+            setActiveLiveStreamDroneId(deployedDrones[0].id)
+            setFeedVisible(true)
+          } else if (activeLiveStreamDroneId) {
+            setFeedVisible(true)
+          }
         }}
         onStopSimulation={() => {
           setAmISimulating(false)
@@ -831,6 +851,66 @@ export default function DashboardPage() {
         }}
         feedVisible={feedVisible}
         onToggleFeedVisible={() => setFeedVisible((v) => !v)}
+        onResolveZone={emitResolveZone}
+        onGenerateZoneReport={async (zoneId) => {
+          if (isGeneratingPdf) return
+          setIsGeneratingPdf(true)
+          
+          const zone = coverageCircles.find((z) => z.id === zoneId)
+          if (!zone) {
+            setIsGeneratingPdf(false)
+            return
+          }
+
+          toast({
+            title: "Generating Report PDF",
+            description: "Analyzing damage data with Gemini...",
+          })
+
+          try {
+            const zoneFrames = frames.filter(f => {
+              const lat = f.lat
+              const lng = f.lng
+              if (lat === null || lng === null) return false
+              const radiusDeg = zone.radiusMeters / 111000
+              return lat >= (zone.centerLat - radiusDeg) && 
+                     lat <= (zone.centerLat + radiusDeg) &&
+                     lng >= (zone.centerLng - radiusDeg) &&
+                     lng <= (zone.centerLng + radiusDeg)
+            })
+
+            const response = await fetch(`${backendBase}/api/zone_report`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ zone, frames: zoneFrames })
+            })
+
+            if (!response.ok) {
+              let msg = "API Failed"
+              try { const errData = await response.json(); if (errData.error) msg = errData.error } catch {}
+              throw new Error(msg)
+            }
+            
+            const report = await response.json()
+            const mapScreenshot = liveMapRef.current?.getScreenshot() || null
+            const { generatePdfReport } = await import("@/lib/pdf-report")
+            
+            await generatePdfReport(zone, report, mapScreenshot)
+
+            toast({
+              title: "Success",
+              description: "PDF report downloaded.",
+            })
+          } catch (e: any) {
+             toast({
+              title: "Report Failed",
+              description: e.message || "An error occurred",
+              variant: "destructive",
+            })
+          } finally {
+            setIsGeneratingPdf(false)
+          }
+        }}
       />
 
       {/* Layer 2: Bottom dock */}

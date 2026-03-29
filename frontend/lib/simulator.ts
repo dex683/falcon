@@ -7,6 +7,7 @@ export interface CoverageCircle {
   locationName?: string
   populationDensity?: number
   addressType?: string
+  resolved?: boolean
 }
 
 export interface CircleDraft {
