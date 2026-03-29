@@ -10,7 +10,7 @@ import MapGL, {
   type MapRef,
 } from "react-map-gl/maplibre"
 import type { MapLibreEvent } from "maplibre-gl"
-import { Plane } from "lucide-react"
+import { Plane, Maximize2, X } from "lucide-react"
 import type { DroneFrame } from "@/context/SocketContext"
 import { getSeverityLevel, SEVERITY_CONFIG } from "@/lib/severity"
 import { SeverityBadge } from "@/components/severity-badge"
@@ -103,6 +103,7 @@ export const LiveMap = forwardRef<LiveMapRef, LiveMapProps>(function LiveMap({
     }
   }), [])
   const [popupInfo, setPopupInfo] = useState<PopupInfo | null>(null)
+  const [enlargedImage, setEnlargedImage] = useState<string | null>(null)
   const [mapLoaded, setMapLoaded] = useState(false)
   const [drawStart, setDrawStart] = useState<{ lat: number; lng: number } | null>(null)
   const [drawHover, setDrawHover] = useState<{ lat: number; lng: number; radiusMeters: number } | null>(null)
@@ -365,7 +366,7 @@ export const LiveMap = forwardRef<LiveMapRef, LiveMapProps>(function LiveMap({
   }, [drawMode])
 
   return (
-    <div className="fixed inset-0 z-0">
+    <div className={`fixed inset-0 ${enlargedImage ? 'z-[9999]' : 'z-0'}`}>
       <MapGL
         ref={mapRef}
         initialViewState={{
@@ -557,22 +558,36 @@ export const LiveMap = forwardRef<LiveMapRef, LiveMapProps>(function LiveMap({
             closeOnClick={false}
             onClose={() => setPopupInfo(null)}
           >
-            <div className="w-52 rounded-xl border border-[oklch(0.35_0.01_240/40%)] bg-[oklch(0.13_0.005_240/92%)] p-3 backdrop-blur-xl">
-              <div className="mb-2 flex items-start justify-between gap-2">
+            <div className="w-60 rounded-xl border border-[oklch(0.35_0.01_240/40%)] bg-[oklch(0.13_0.005_240/92%)] p-3 backdrop-blur-xl">
+              <div className="mb-3 flex items-start justify-between gap-2">
                 <span className="text-[11px] font-mono text-[oklch(0.45_0_0)]">#{popupInfo.frame.frame_id}</span>
-                <SeverityBadge score={popupInfo.frame.severity} />
+                <span className="text-[11px] font-mono text-[oklch(0.45_0_0)]">
+                  {popupInfo.frame.receivedAt ? new Date(popupInfo.frame.receivedAt).toLocaleTimeString() : ""}
+                </span>
               </div>
               
               {popupInfo.frame.image_b64 ? (
-                <div className="mb-2 w-full overflow-hidden rounded bg-[oklch(0_0_0)]">
+                <div 
+                  className="group relative mb-3 w-full cursor-pointer overflow-hidden rounded bg-[oklch(0_0_0)] outline outline-1 outline-[oklch(1_0_0/10%)] transition-all hover:outline-[oklch(0.5_0.1_200)]"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setEnlargedImage(popupInfo.frame.image_b64 ?? null)
+                  }}
+                  title="Click to enlarge"
+                >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={`data:image/jpeg;base64,${popupInfo.frame.image_b64}`} alt="Processed Frame" className="h-auto w-full object-contain" />
+                  <img src={`data:image/jpeg;base64,${popupInfo.frame.image_b64}`} alt="Processed Frame" className="h-auto w-full object-contain transition-transform duration-300 group-hover:scale-105" />
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-300 group-hover:bg-black/40 group-hover:opacity-100">
+                    <Maximize2 className="h-6 w-6 text-white drop-shadow-md" />
+                  </div>
                 </div>
               ) : null}
 
-              <p className="mb-2 text-sm font-medium capitalize text-[oklch(0.96_0_0)]">
-                {popupInfo.frame.label.replace(/_/g, " ")}
-              </p>
+              <div className="mb-2 flex items-center justify-between border-b border-[oklch(0.35_0.01_240/40%)] pb-2">
+                <span className="text-xs font-medium text-[oklch(0.75_0_0)]">Severity Score</span>
+                <SeverityBadge score={popupInfo.frame.severity} />
+              </div>
+
               <p className="font-mono text-[11px] text-[oklch(0.45_0_0)]">
                 {popupInfo.frame.lat.toFixed(5)}, {popupInfo.frame.lng.toFixed(5)}
               </p>
@@ -598,6 +613,33 @@ export const LiveMap = forwardRef<LiveMapRef, LiveMapProps>(function LiveMap({
           </Marker>
         ) : null}
       </MapGL>
+
+      {/* Enlarged Image Modal */}
+      {enlargedImage && (
+        <div 
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-[oklch(0.05_0_0/80%)] p-4 backdrop-blur-md transition-all animate-in fade-in duration-200"
+          onClick={() => setEnlargedImage(null)}
+        >
+          <div 
+            className="relative max-h-full max-w-[90vw] rounded-2xl bg-[oklch(0.12_0_0)] p-2 shadow-2xl ring-1 ring-white/10 animate-in zoom-in-95 duration-200" 
+            onClick={e => e.stopPropagation()}
+          >
+            <button 
+              className="absolute -right-3 -top-3 flex h-8 w-8 items-center justify-center rounded-full bg-[oklch(0.2_0_0)] text-[oklch(0.6_0_0)] ring-1 ring-white/20 transition-colors hover:bg-[oklch(0.3_0_0)] hover:text-white"
+              onClick={() => setEnlargedImage(null)}
+              aria-label="Close enlarged view"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img 
+              src={`data:image/jpeg;base64,${enlargedImage}`} 
+              className="max-h-[85vh] w-auto rounded-xl object-contain" 
+              alt="Enlarged full resolution view of capture" 
+            />
+          </div>
+        </div>
+      )}
     </div>
   )
 })

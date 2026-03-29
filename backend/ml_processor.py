@@ -357,56 +357,7 @@ class DamageDetector:
                 prob_bbox = draw.textbbox((0, 0), prob_text, font=font_small)
                 bar_x += (prob_bbox[2] - prob_bbox[0]) + 12
 
-        # Draw bounding boxes for individual detections
-        for det in detections:
-            bbox = det["bbox"]
-            color = det["color"]
-            label = det["label"]
-            confidence = det["confidence"]
-            severity_label = det["severity_label"]
-            severity = det["severity"]
-
-            x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
-
-            # Draw bounding box (thicker outline)
-            for i in range(3):
-                draw.rectangle([x1 - i, y1 - i, x2 + i, y2 + i], outline=color)
-
-            # Draw label background
-            label_text = f"{label} {confidence:.0%}"
-            severity_text = f"[Severity: {severity}/10 — {severity_label}]"
-
-            # Get text dimensions
-            text_bbox = draw.textbbox((0, 0), label_text, font=font)
-            text_w = text_bbox[2] - text_bbox[0]
-            text_h = text_bbox[3] - text_bbox[1]
-
-            sev_bbox = draw.textbbox((0, 0), severity_text, font=font_small)
-            sev_w = sev_bbox[2] - sev_bbox[0]
-
-            total_w = max(text_w, sev_w) + 12
-            total_h = text_h + 20
-
-            # Label background
-            draw.rectangle(
-                [x1, y1 - total_h - 4, x1 + total_w, y1],
-                fill=color,
-            )
-
-            # Label text
-            draw.text((x1 + 4, y1 - total_h - 2), label_text, fill="white", font=font)
-            draw.text((x1 + 4, y1 - 16), severity_text, fill="white", font=font_small)
-
-            # Corner markers
-            marker_len = min(15, (x2 - x1) // 4)
-            for corner_x, corner_y, dx, dy in [
-                (x1, y1, 1, 1), (x2, y1, -1, 1),
-                (x1, y2, 1, -1), (x2, y2, -1, -1)
-            ]:
-                draw.line([(corner_x, corner_y), (corner_x + dx * marker_len, corner_y)],
-                          fill=color, width=3)
-                draw.line([(corner_x, corner_y), (corner_x, corner_y + dy * marker_len)],
-                          fill=color, width=3)
+        # Bounding boxes have been removed per user request
 
         return annotated
 
