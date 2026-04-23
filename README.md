@@ -1,4 +1,4 @@
-# Autonomous Drone based Damage mapping - Team Skeem
+# Autonomous Drone based Damage mapping
 A real-time disaster damage assessment system that uses simulated drone footage to map and prioritize damaged areas for first responders.
 
 ---
