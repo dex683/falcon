@@ -20,3 +20,6 @@ node_modules
 
 __pycache__/
 backend/__pycache__/
+
+#Training data folder
+test-org-img
