@@ -366,3 +366,8 @@ transforms.Compose([
 | `flask` | Local web UI (`predict_app.py`) |
 | `gradio` | Hugging Face Spaces UI (`hf_space/app.py`) |
 | `scikit-learn` | Stratified split, classification report (training only) |
+
+## Metric Graphs
+![alt text](../resources/final_validation_report.jpg)
+![alt text](../resources/confusion_matrixv1.png)
+![alt text](../resources/roc.png)

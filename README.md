@@ -15,7 +15,7 @@ After a disaster, ground teams need to know where to go first. This project simu
 and images to the back-end over a Web Socket connection.
 2. The back-end places incoming frames into a SQLite-backed FIFO queue. A background
 worker picks them up one at a time and runs inference using a MobileNetV2 model
-fine-tuned on the xBD disaster dataset.
+fine-tuned on the RescueNet/xBD disaster dataset.
 3. Each frame is assigned a damage severity score from 0 to 10 and a damage label (e.g.
 structural collapse, flooding, fire).
 4. Results are broadcast to the front-end in real time. The map updates with color-coded
